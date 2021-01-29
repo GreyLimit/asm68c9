@@ -3,9 +3,9 @@ A simple (and simple minded) assembler for the Motorola 6809.
 
 A quick readme as a bit of a "place holder";
 
-This is a relatively simple simple assembler for the Motorola 6809 written as a single C source file accepting a fairly broad set of assembler directives accepting the main code related directives from the early Motorola code through to more recently accepted common directives.
+This is a relatively simple minded, simple assembler for the Motorola 6809 written as a single C source file accepting a fairly broad set of assembler directives accepting the main code related directives from the early Motorola code through to more recently accepted common directives.
 
-It only accepts 6809 opcodes, though with modest work I would expect it would be easily extended to cover derivatives.
+It only accepts 6809 opcodes, though with modest work I would expect it would be easily extended to cover 6809 derivatives.
 
 The program does not "output" any form of executable or object file, instead outputing lines starting with a 4 digit hex address and followed by one or more
 2 digit hex byte values.  A symbol table is displayed.
