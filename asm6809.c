@@ -322,7 +322,7 @@ static op_ext ext_ld_st16[] = {{ "d", 0x0046 }, { "s", 0x1048 }, { "u", 0x0048 }
 //
 //	An empty extension
 //
-static op_ext ext_none[] = {{ "", 0x000 }, { NULL }};
+static op_ext ext_none[] = {{ "", 0x0000 }, { NULL }};
 
 //
 //	Branch Codes : $?0 - $?f
@@ -818,7 +818,7 @@ static void reset_conditions( void ) {
 typedef enum {
 	TOK_SYMBOL, TOK_VALUE, TOK_STRING,		// Variable Tokens
 	//
-	TOK_DIRECT, TOK_EXTENDED,			// < >
+	TOK_DIRECT, TOK_EXTENDED,			// > <
 	TOK_IMMEDIATE,					// #
 	TOK_A, TOK_B, TOK_D,				// A B D
 	TOK_X, TOK_Y,					// X Y
@@ -1009,14 +1009,13 @@ typedef struct _resync {
 //
 typedef enum {
 	HAS_NONE	= 0000,
-	HAS_XXXXXXX	= 0001,	// now unused.
-	HAS_8_BIT	= 0002,
-	HAS_16_BIT	= 0004,
-	HAS_U_REG	= 0010,
-	HAS_S_REG	= 0020,
-	HAS_PC_REG	= 0040,
-	HAS_CC_REG	= 0100,
-	HAS_DP_REG	= 0200
+	HAS_8_BIT	= 0001,
+	HAS_16_BIT	= 0002,
+	HAS_U_REG	= 0004,
+	HAS_S_REG	= 0010,
+	HAS_PC_REG	= 0020,
+	HAS_CC_REG	= 0040,
+	HAS_DP_REG	= 0100
 } arg_content;
 
 //
@@ -1081,8 +1080,7 @@ typedef struct {
 } arg_data;
 
 //
-//	look for a resync, return number of skipped
-//	tokens if found.
+//	look for a resync, return token skipped to.
 //
 static a_token *do_resync( a_token *list, resync *toks, bool log ) {
 	resync	*check;
@@ -1235,6 +1233,9 @@ static void scan_register_list( a_token *list, arg_data *data ) {
 		assert( list != NULL );
 
 		if( list->tok == TOK_EOS ) {
+			//
+			//	return from here if this is a proper register list.
+			//
 			data->reg_count = count;
 			return;
 		}
@@ -1249,6 +1250,9 @@ static void scan_register_list( a_token *list, arg_data *data ) {
 
 		assert( list != NULL );
 	}
+	//
+	//	Return from here is register list is truncated
+	//
 }
 
 //
@@ -1270,9 +1274,9 @@ static bool isoctal( char c ) {
 }
 
 //
-//	Convert a series of characters into a word value.
+//	Convert a series of characters into a value.
 //
-static word numeric_value( char *text, int len ) {
+static int numeric_value( char *text, int len ) {
 	int	value, digit, base;
 
 	//
@@ -1321,7 +1325,7 @@ static word numeric_value( char *text, int len ) {
 		if(( digit = digit_value( *text++ )) >= base ) log_error( "Invalid number constant" );
 		value = value * base + digit;
 	}
-	return( (word)value );
+	return( value );
 }
 
 //
@@ -1494,7 +1498,17 @@ static int evaluate_tree( a_token *here, assemble_phase pass ) {
 }
 
 //
-//	Here we are converting into a numerical expression
+//	Here we are converting token into a numerical expression.
+//
+//	The precedence and order of the operators is implemented in
+//	a limited fashion with 3 levels:
+//
+//		Highest(Atomic):	(), Unary +, Unary -, Not ~, Address *,
+//					values or symbols
+//
+//		Middle:			*, /, <<, >>, &
+//
+//		Lowest:			+, -, |, ^
 //
 static a_token *organise_value( a_token *list, resync *toks, a_token **tree, bool log );
 
@@ -1533,6 +1547,9 @@ static a_token *organise_atomic( a_token *list, resync *toks, a_token **tree, bo
 			break;
 		}
 		case TOK_MUL: {
+			//
+			//	Motorola this address represented as "*"
+			//
 			list->tok = TOK_ADDRESS;
 			*tree = list;
 			list = list->b;
@@ -1600,14 +1617,6 @@ static a_token *organise_value( a_token *list, resync *toks, a_token **tree, boo
 static a_token *organise_reg_or_value( a_token *list, resync *toks, a_token **tree, arg_data *data, assemble_phase pass ) {
 
 	switch( list->tok ) {
-		
-//		case TOK_X:
-//		case TOK_Y:
-//		case TOK_U:
-//		case TOK_S:
-//		case TOK_DP:
-//		case TOK_PC:
-
 		case TOK_A:
 		case TOK_B:
 		case TOK_D: {
@@ -1863,7 +1872,7 @@ static bool analyse_arg( char *input, arg_data *result, assemble_phase pass ) {
 }
 
 //
-//	given a string, return one (or more) values which
+//	Given a string, return one (or more) values which
 //	the evaluation of the string results in.
 //
 //	We are going to do something underhand(ish):  If
@@ -2029,9 +2038,7 @@ static bool process_machine_inst( int line, char *opcode, char *arg, assemble_ph
 			}
 			if( e->extn == NULL ) continue;
 			//
-			//	e (if not NULL) points to the correct extension record.
-			//
-			//	If there shuold be an argument then we process it, and try to
+			//	If there should be an argument then we process it, and try to
 			//	match against the list provided.
 			//
 			for( a = o->args; a->mode != OP_NONE; a++ ) {
@@ -2085,21 +2092,26 @@ static bool process_machine_inst( int line, char *opcode, char *arg, assemble_ph
 					break;
 				}
 				case OP_IMM_BYTE: {			// #byte
-					if(( H( data.value ) != 0 )&&( H( data.value ) != 0xff )) if( pass == GENERATOR_PHASE ) log_error( "Immediate value out of range" );
+					if(( data.value < -128 )||( data.value > 255 )) if( pass == GENERATOR_PHASE ) log_error( "Immediate value out of byte range" );
 					inst[ len++ ] = L( data.value );
 					break;
 				}
 				case OP_IMM_WORD: {			// #word
+					if(( data.value < -32768 )||( data.value > 65535 )) if( pass == GENERATOR_PHASE ) log_error( "Immediate value out of word range" );
 					inst[ len++ ] = H( data.value );
 					inst[ len++ ] = L( data.value );
 					break;
 				}
 				case OP_DIRECT: {			// value (8-bit with DP)
-					if(( H( data.value ) != 0 )&&( H( data.value ) != direct_page )) if( pass == GENERATOR_PHASE ) log_error( "Direct address out of range" );
+					if((( data.value < 0 )||( data.value > 255 ))&&( H( data.value ) != direct_page )) if( pass == GENERATOR_PHASE ) log_error( "Direct page index out of range" );
 					inst[ len++ ] = L( data.value );
 					break;
 				}
 				case OP_EXTENDED: {			// value (16-bit)
+					//
+					//	There ought to be a good sanity check here, but I do not
+					//	want to accidentally catch "wrap around" calculations.
+					//
 					inst[ len++ ] = H( data.value );
 					inst[ len++ ] = L( data.value );
 					break;
@@ -2233,7 +2245,7 @@ static bool process_machine_inst( int line, char *opcode, char *arg, assemble_ph
 								break;
 							}
 							//
-							//	No?  Now subtrace an EXTRA 1 from the offset as we
+							//	No?  Now subtract an extra 1 from the offset as we
 							//	have to use a 16 bit value (so EA now needs THREE bytes).
 							//
 							off--;
@@ -2256,7 +2268,7 @@ static bool process_machine_inst( int line, char *opcode, char *arg, assemble_ph
 					break;
 				}
 				case OP_SRELATIVE: {			// -128..+127 relative
-					// Remember were to put the
+					// Remember where to put the
 					// relative offset but also
 					// get final length of inst.
 					i = len++;
@@ -2286,6 +2298,12 @@ static bool process_machine_inst( int line, char *opcode, char *arg, assemble_ph
 					break;
 				}
 				case OP_REG_LIST: {			// Push or Pull
+					//
+					//	really ought to check to see if the source code
+					//	is attempting to push/pull S to/from the S stack
+					//	and likewise with U and the U stack.  The data flags
+					//	contain the means of working this out.
+					//
 					inst[ len++ ] = data.reg_list;
 					break;
 				}
@@ -2298,7 +2316,7 @@ static bool process_machine_inst( int line, char *opcode, char *arg, assemble_ph
 			assert( len <= MAX_INSTRUCTION );
 			
 			//
-			//	Ouput instruction (if appropiate)
+			//	Output instruction (if appropiate)
 			//
 			if( pass == GENERATOR_PHASE ) {
 				printf( "%04X", this_address );
@@ -2363,7 +2381,7 @@ static bool asm_setdp( int line, char *label, char *opcode, char *arg, assemble_
 		//
 		//	Have value, set virtual DP
 		//
-		if( val < 256 ) {
+		if(( val >= 0 )&&( val < 256 )) {
 			direct_page = val;
 			return( ret );
 		}
