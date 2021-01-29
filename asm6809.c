@@ -2064,7 +2064,7 @@ static bool process_machine_inst( int line, char *opcode, char *arg, assemble_ph
 			//	a	->	Argument modifications
 			//
 			//DEBUG
-			printf( "Decode:%d|%s|%s|\n", line, o->name, e->extn );
+			//printf( "Decode:%d|%s|%s|\n", line, o->name, e->extn );
 			//
 			//	Build the base machine instruction value.
 			//
@@ -2795,7 +2795,7 @@ static int parse_input( FILE *input, assemble_phase pass ) {
 		//
 		if( break_line( line, &label, &opcode, &arg, &comment )) {
 			//DEBUG
-			printf( "Input:%d|%s|%s|%s|%s\n", count, label, opcode, arg, comment );
+			//printf( "Input:%d|%s|%s|%s|%s\n", count, label, opcode, arg, comment );
 			//
 			//	Anything to do?
 			//
@@ -2895,7 +2895,7 @@ int main( int argc, char *argv[] ) {
 		//
 		rewind( source );
 		reset_conditions();
-		show_symbols( sym_sort );
+		//show_symbols( sym_sort );
 		if( !parse_input( source, NORMALISE_PHASE )) {
 			//
 			//	Display error message and exit
@@ -2931,7 +2931,6 @@ int main( int argc, char *argv[] ) {
 	//
 	rewind( source );
 	reset_conditions();
-	show_symbols( sym_sort );
 	if( !parse_input( source, GENERATOR_PHASE )) {
 		fprintf( stderr, "Code generation pass failed.\n" );
 		return( 6 );
