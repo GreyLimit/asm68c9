@@ -1,4 +1,27 @@
 ///
+///	asm68c9: Motorola 6809 Assembler.
+///
+///	This software is composed of a single source file:
+///
+///		asm68c9.c
+///
+///	Copyright (C) 2021, Jeff Penfold, jeff.penfold@googlemail.com
+///	
+///	This program is free software: you can redistribute it and/or modify
+///	it under the terms of the GNU General Public License as published by
+///	the Free Software Foundation, either version 3 of the License, or
+///	(at your option) any later version.
+///
+///	This program is distributed in the hope that it will be useful,
+///	but WITHOUT ANY WARRANTY; without even the implied warranty of
+///	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+///	GNU General Public License for more details.
+///
+///	You should have received a copy of the GNU General Public License
+///	along with this program.  If not, see <https://www.gnu.org/licenses/>.
+///
+
+///
 ///	Yet another assembler for a defunct retro CPU.
 ///
 ///	I give you another "asm6809".
