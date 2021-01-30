@@ -1,4 +1,4 @@
-# as6809
+# asm68c9
 A simple (and simple minded) assembler for the Motorola 6809.
 
 A quick readme as a bit of a "place holder";
