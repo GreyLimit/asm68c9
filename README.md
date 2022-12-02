@@ -11,7 +11,7 @@ Excerpts from the earlier document:
 
 This is a relatively simple minded, simple assembler for the Motorola 6809 written as a single C source file accepting a fairly broad set of assembler directives accepting the main code related directives from the early Motorola code through to more recently accepted common directives.
 
-It only accepts the Motorola 6809 opcodes, though with modest work I would expect it would be easily extended to cover the Hitachi 6309 derivatives.
+It only accepts the Motorola 6809 opcodes, though with modest work I expect it would be easily extended to cover the Hitachi 6309 derivatives.
 
 Speed was not a design criteria, so the program executes at least three passes of the source code to ensure that all labels have "stabilised" on a set value, the last pass generating the output.
 
@@ -26,23 +26,28 @@ The assembler has been "tweaked" to (optionally) accept original Motorola format
 *	Character constants are preceeded by only a single quote (').
 *	String constants are delimited by the slash character (/).
 
-Enabling 'legacy syntax' also enables a few possible warnings relating to potential clashes between the default syntax interpretation against the legacy version.
+Enabling 'legacy syntax' also enables a few possible warnings relating to potential clashes between the default syntax interpretation against the legacy version.  From this statement it can be infured that previous testing had been completed on a suitable 'updated' "assist09.asm".  This testing has been repeated against (what I believe is) an original copy of the sourec code successfully.
 
 This may not be enough to assemble every original assembler file (or even most), but should assist in doing so.
 
 Finally, the command line options accepted by the program (as displayed by '--help'):
 
 ```
-Usage: asm68c9 [ {options} ] {filename}
+Usage: ./a.out [ {options} ] {filename}
 Options:-
-	--hex		Output raw hexidecimal values
+	--text		Output text hexadecimal values
 	--intel		Output Intel Hex format data
 	--motorola	Output Motorola S records
+	--no-output	Do not output any code
+	--stdout	Send output to console
 	--legacy-syntax	Accept legacy Motorola syntax
 	--symbols	Output Symbol table
+	--listing	Output an assembly listing
 	--dump-opcodes	Display op-codes table
 	--help		Display this help information
 	--debug		Enable additonal debugging output
 ```
+
+At present the "--listing" option is a place holder for feature not yet written.
 
 Jeff
