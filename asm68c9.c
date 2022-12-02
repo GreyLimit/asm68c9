@@ -24,12 +24,17 @@
 ///
 ///	Yet another assembler for a defunct retro CPU.
 ///
-///	I give you another "asm6809".
+///	I give you another 6809 assembler: "asm68c9".
 ///
-///	Keypoint is output to "C Source" friendly text
-///	file enabling "assembled" 6809 programs to be
-///	baked into 6809 emulations tagetting MCU based
-///	implementation.
+///	Features:
+///
+///	o	Output to hexadecimal text
+///	o	Intel '.hex' format
+///	o	Motorola '.srec' format
+///	o	Directed to screen or file
+///	o	Optional support for some legacy syntax
+///	o	Wide(ish) selection of assembler directives
+///		supported
 ///
 
 //
@@ -60,6 +65,7 @@ typedef uint16_t word;
 #define BUFFER		1024
 #define MAX_CONSTANTS	64
 #define MAX_INSTRUCTION	8
+#define MAX_FILL	(16*1024)
 
 #define true		(0==0)
 #define false		(0==1)
@@ -68,27 +74,57 @@ typedef uint16_t word;
 #define QUOTE		'\''
 #define QUOTES		'\"'
 #define ESCAPE		'\\'
+#define SLASH		'/'
+#define STAR		'*'
+#define USCORE		'_'
+#define PERIOD		'.'
+#define ZERO		'0'
+#define NINE		'9'
+#define DOLLAR		'$'
+#define PERCENT		'%'
+#define COLON		':'
+#define SPACE		' '
 
 //
 //	Syntactic sugar
 //
 #define FUNC(a)		(*(a))
-#define NEW(t)		((t *)malloc( sizeof( t )))
-#define STACK(t)	((t *)alloca( sizeof( t )))
+#define NEW(t)		((t *)malloc(sizeof( t )))
+#define STACK(t)	((t *)alloca(sizeof( t )))
+#define STACK_N(t,n)	((t *)alloca(sizeof( t )*(n)))
 
 #define H(v)		(((v)>>8)&0xff)
 #define L(v)		((v)&0xff)
 
 //
-//	Define a debug flag/level
+//	Define a set of flags that are used to configure
+//	and control the assembler.  These are OR'd together
+//	into the option_flags variable.
 //
-//	This is set using an environment variable
-//	rather than a command line
+#define OPTIONS_NONE		00000
 //
-static int debug_level = 0;
+#define DISPLAY_TEXT		00001
+#define DISPLAY_INTEL		00002
+#define DISPLAY_MOTOROLA	00004
+#define DISPLAY_NOTHING		00010
+#define DISPLAY_MASK		(DISPLAY_TEXT|DISPLAY_INTEL|DISPLAY_MOTOROLA|DISPLAY_NOTHING)
+#define DISPLAY_STDOUT		00020
+//
+#define LEGACY_SYNTAX		00100
+#define DISPLAY_SYMBOLS		00200
+#define DISPLAY_LISTING		00400
+//
+#define DISPLAY_OPCODES		01000
+#define DISPLAY_HELP		02000
+#define DEBUG_ENABLE		04000
 
 //
-//	Start be defining what constitutes an op code
+//	This is where the flags are combined.
+//
+static int option_flags = OPTIONS_NONE;
+
+//
+//	Start by defining what constitutes an op code
 //	and its supporting (optional) argument.
 //
 //	Excluding the assemblers intrinsic commands,
@@ -569,34 +605,303 @@ static void dump_opcodes( void ) {
 //
 //	Define the maximum number of errors we will cache.
 //
-#define MAX_ERROR_CACHE 10
+#define MAX_WARNING_CACHE	10
+#define MAX_ERROR_CACHE		10
 
 //
-//	The fixed string error cache.
+//	The fixed string warning and error cache.
 //
+static char *cached_warning[ MAX_WARNING_CACHE ];
 static char *cached_error[ MAX_ERROR_CACHE ];
 
 //
 //	How many cached to far
 //
+static int warning_cache = 0;
 static int error_cache = 0;
 
 //
-//	routines to log and error string, recover error strings,
-//	and clear the cache.
+//	routines to log warning and error strings, recover such strings,
+//	and clear the caches.
 //
 
+static void log_warning( char *text ) {
+	if( warning_cache < MAX_WARNING_CACHE ) cached_warning[ warning_cache++ ] = text;
+}
 static void log_error( char *text ) {
 	if( error_cache < MAX_ERROR_CACHE ) cached_error[ error_cache++ ] = text;
 }
 
+static char *warning_text( int idx ) {
+	if(( idx >= 0 )&&( idx < warning_cache )) return( cached_warning[ idx ]);
+	return( NULL );
+}
 static char *error_text( int idx ) {
 	if(( idx >= 0 )&&( idx < error_cache )) return( cached_error[ idx ]);
 	return( NULL );
 }
 
+static void reset_warning_cache( void ) {
+	warning_cache = 0;
+}
 static void reset_error_cache( void ) {
 	error_cache = 0;
+}
+
+////////////////////////////////////////////////////////////////////////
+//
+//	The data output system.
+//
+////////////////////////////////////////////////////////////////////////
+
+//
+//	Define some generic API variables which the specific
+//	output implementations can initialise and use as appropiate.
+//
+#define MAX_OUTPUT_BUFFER 16
+static byte output_buffer[ MAX_OUTPUT_BUFFER ];
+static int buffered_output = 0;
+static word buffered_address = 0;
+static FILE *output_file = NULL;
+
+//
+//	This will be structured around a data structure containing
+//	pointers to the routines which implement the individual
+//	API routines.
+//
+
+typedef struct {
+	void	FUNC( init_output )( char *source );
+	void	FUNC( flush_output )( void );
+	void	FUNC( set_address )( word adrs );
+	void	FUNC( add_byte )( byte data );
+	void	FUNC( end_output )( void );
+} output_api;
+
+//
+//	A dummy output system which does not output
+//	anything.
+//
+static void _null_init_output( char *source ) {
+}
+static void _null_flush_output( void ) {
+}
+static void _null_set_address( word adrs ) {
+}
+static void _null_add_byte( byte data ) {
+}
+static void _null_end_output( void ) {
+}
+
+static output_api _null_output_api = { _null_init_output, _null_flush_output, _null_set_address, _null_add_byte, _null_end_output };
+
+//
+//	The text output system.
+//
+static void _text_init_output( char *source ) {
+	buffered_output = 0;
+	buffered_address = 0;
+}
+static void _text_flush_output( void ) {
+	if( buffered_output ) {
+		fprintf( output_file, "%04x", (int)buffered_address );
+		for( int i = 0; i < buffered_output; fprintf( output_file, " %02x", (int)output_buffer[ i++ ]));
+		fprintf( output_file, "\n" );
+		buffered_address += buffered_output;
+		buffered_output = 0;
+	}
+}
+static void _text_set_address( word adrs ) {
+	word	cur;
+
+	if(( cur = buffered_address + buffered_output ) != adrs ) {
+		if( buffered_output ) _text_flush_output();
+		buffered_address = adrs;
+	}
+}
+static void _text_add_byte( byte data ) {
+	output_buffer[ buffered_output++ ] = data;
+	if( buffered_output >= MAX_OUTPUT_BUFFER ) _text_flush_output();
+}
+
+static void _text_end_output( void ) {
+	_text_flush_output();
+}
+
+static output_api _text_output_api = { _text_init_output, _text_flush_output, _text_set_address, _text_add_byte, _text_end_output };
+
+//
+//	The Motorola S record output system.
+//
+static void _srec_init_output( char *source ) {
+	int	l;
+	byte	s;
+	
+	buffered_output = 0;
+	buffered_address = 0;
+	//
+	//	Send out header record.
+	//
+	//	For the moment This is not following the header format:
+	//
+	//		20 bytes	Module name
+	//		2 bytes		Version
+	//		2 bytes		Revision
+	//		0-36 bytes	Comment
+	//
+	s = 0;
+	l = strlen( source );
+	fprintf( output_file, "S0%02X0000", l + 3 );	// 3 accounts for address '0000' + checksum 'nn'
+	for( int i = 0; i < l; i++ ) {
+		s += source[ i ];
+		fprintf( output_file, "%02X", source[ i ]);
+	}
+	fprintf( output_file, "%02X\r\n", ~s & 0xff );
+}
+static void _srec_flush_output( void ) {
+	if( buffered_output ) {
+		byte	s;
+
+		s = H( buffered_address ) + L( buffered_address );
+		fprintf( output_file, "S1%02X%04X", 3 + buffered_output, buffered_address );
+		for( int i = 0; i < buffered_output; i++ ) {
+			s += output_buffer[ i ];
+			fprintf( output_file, "%02X", output_buffer[ i ]);
+		}
+		fprintf( output_file, "%02X\r\n", ~s & 0xff );
+		buffered_address += buffered_output;
+		buffered_output = 0;
+	}
+}
+static void _srec_set_address( word adrs ) {
+	word	cur;
+
+	if(( cur = buffered_address + buffered_output ) != adrs ) {
+		if( buffered_output ) _srec_flush_output();
+		buffered_address = adrs;
+	}
+}
+static void _srec_add_byte( byte data ) {
+	output_buffer[ buffered_output++ ] = data;
+	if( buffered_output >= MAX_OUTPUT_BUFFER ) _srec_flush_output();
+}
+
+static void _srec_end_output( void ) {
+	byte	s;
+	
+	_srec_flush_output();
+	s = H( buffered_address ) + L( buffered_address );
+	fprintf( output_file, "S903%04X%02X\r\n", buffered_address, ~s & 0xff );
+}
+
+static output_api _srec_output_api = { _srec_init_output, _srec_flush_output, _srec_set_address, _srec_add_byte, _srec_end_output };
+
+//
+//	The Intel Hex record output system.
+//
+static void _hex_init_output( char *source ) {
+	buffered_output = 0;
+	buffered_address = 0;
+}
+static void _hex_flush_output( void ) {
+	if( buffered_output ) {
+		byte	s;
+
+		s = buffered_output + H( buffered_address ) + L( buffered_address );
+		fprintf( output_file, ":%02X%04X00", buffered_output, buffered_address );
+		for( int i = 0; i < buffered_output; i++ ) {
+			s += output_buffer[ i ];
+			fprintf( output_file, "%02X", output_buffer[ i ]);
+		}
+		fprintf( output_file, "%02X\n", -s & 0xff );
+		buffered_address += buffered_output;
+		buffered_output = 0;
+	}
+}
+static void _hex_set_address( word adrs ) {
+	word	cur;
+
+	if(( cur = buffered_address + buffered_output ) != adrs ) {
+		if( buffered_output ) _hex_flush_output();
+		buffered_address = adrs;
+	}
+}
+static void _hex_add_byte( byte data ) {
+	output_buffer[ buffered_output++ ] = data;
+	if( buffered_output >= MAX_OUTPUT_BUFFER ) _hex_flush_output();
+}
+
+static void _hex_end_output( void ) {
+	_srec_flush_output();
+	fprintf( output_file, ":00000001FF\n" );
+}
+
+static output_api _hex_output_api = { _hex_init_output, _hex_flush_output, _hex_set_address, _hex_add_byte, _hex_end_output };
+
+//
+//	This is the entry point into the output API, we defaullt to
+//	the null output option to ensure something is available.
+//
+static output_api *output_routine = &_null_output_api;
+
+static bool init_output( char *source ) {
+	char	*suffix;
+
+	suffix = NULL;
+	switch( option_flags & DISPLAY_MASK ) {
+		case DISPLAY_TEXT: {
+			output_routine = &_text_output_api;
+			suffix = ".text";
+			break;
+		}
+		case DISPLAY_INTEL: {
+			output_routine = &_hex_output_api;
+			suffix = ".hex";
+			break;
+		}
+		case DISPLAY_MOTOROLA: {
+			output_routine = &_srec_output_api;
+			suffix = ".srec";
+			break;
+		}
+		case DISPLAY_NOTHING: {
+			output_routine = &_null_output_api;
+			break;
+		}
+	}
+	if(( suffix == NULL )||( option_flags & DISPLAY_STDOUT )) {
+		output_file = stdout;
+	}
+	else {
+		char	*fname, *dot;
+
+		fname = STACK_N( char, ( strlen( source ) + strlen( suffix ) + 1 ));
+		strcpy( fname, source );
+		if(( dot = strrchr( fname, PERIOD )) != NULL ) *dot = EOS;
+		strcat( fname, suffix );
+		if(( output_file = fopen( fname, "w" )) == NULL ) {
+			log_error( "Unable to open output file" );
+			return( false );
+		}
+	}
+	FUNC( output_routine->init_output )( source );
+	return( true );
+}
+static void flush_output( void ) {
+	FUNC( output_routine->flush_output )();
+}
+static void set_address( word adrs ) {
+	FUNC( output_routine->set_address )( adrs );
+}
+static void add_byte( byte data ) {
+	FUNC( output_routine->add_byte )( data );
+}
+static void end_output( void ) {
+	FUNC( output_routine->end_output )();
+	if(( output_file )&&(!( option_flags & DISPLAY_STDOUT ))) {
+		fclose( output_file );
+		output_file = NULL;
+	}
 }
 
 ////////////////////////////////////////////////////////////////////////
@@ -662,7 +967,8 @@ static int normalisation_count( void ) {
 }
 
 //
-//	backend symbol routine
+//	backend symbol routine; always returns a valid
+//	address to a symbol record.
 //
 static sym_entry *_find_symbol( sym_entry **adrs, char *name ) {
 	sym_entry	*ptr;
@@ -704,7 +1010,7 @@ static bool set_symbol( char *name, word value, assemble_phase pass ) {
 	sym_entry	*sym;
 
 	sym = find_symbol( name );
-	if( debug_level ) printf( "Set %s=%04X\n", name, value );
+	if( option_flags & DEBUG_ENABLE ) printf( "Set %s=%04X\n", name, value );
 	switch( pass ) {
 		case GATHER_PHASE: {
 			//
@@ -848,7 +1154,10 @@ static void reset_conditions( void ) {
 //	creation).
 //
 typedef enum {
-	TOK_SYMBOL, TOK_VALUE, TOK_STRING,		// Variable Tokens
+	TOK_SYMBOL, TOK_VALUE,				// Variable Tokens
+	TOK_STRING, TOK_CHARACTER,			//
+	TOK_LEGACY_STRING,				//	Legacy string and
+	TOK_LEGACY_CHARACTER,				//	character constants
 	//
 	TOK_DIRECT, TOK_EXTENDED,			// > <
 	TOK_IMMEDIATE,					// #
@@ -944,42 +1253,150 @@ typedef struct _a_token {
 } a_token;
 
 //
+//	Small selection of routines to ease the recognition and
+//	scanning of various syntactic elements.
+//
+
+//
+//	Identification of an identifier; first then subsequent characters:
+//
+static bool is_ident_1( char c ) {
+	return(( isalpha( c )||( c == USCORE ))||(( option_flags & LEGACY_SYNTAX )&&( c == PERIOD )));
+}
+static bool is_ident_2( char c ) {
+	return(( isalnum( c )||( c == USCORE ))||(( option_flags & LEGACY_SYNTAX )&&( c == PERIOD )));
+}
+
+//
+//	Identification of a number; first then subsequent characters:
+//
+static bool is_number_1( char c ) {
+	return( isdigit( c )||( c == DOLLAR )||( c == PERCENT ));
+}
+static bool is_number_2( char c ) {
+	return( isalnum( c ));
+}
+
+//
 //	Pull the next token off a string (white space is ignored)
 //
 static char *get_token( char *input, a_token *tok ) {
 	char	c, q;
-	bool	f;
 
+	//
+	//	Clear off leading white spaces...
+	//
 	while( isspace( c = *input )) input++;
+	//
+	//	Some token starts here!
+	//
 	tok->start = input;
 	tok->len = 0;
+	//
+	//	End of the string?
+	//
 	if( c == EOS ) {
 		tok->tok = TOK_EOS;
 		return( input );
 	}
-	if((( c >= '0' )&&( c <='9' ))||( c == '$' )||( c == '%' )) {
+	//
+	//	Numeric value (of one sort or another).
+	//
+	if( is_number_1( c )) {
 		do {
-			c = *++input;
 			tok->len++;
-		} while( isalnum( c ));
+			c = *++input;
+		} while( is_number_2( c ));
 		tok->tok = TOK_VALUE;
 		return( input );
 	}
-	if( isalpha( c )||( c =='_' )) {
+	//
+	//	Identifier?
+	//
+	if( is_ident_1( c )) {
 		do {
-			c = *++input;
 			tok->len++;
-		} while( isalnum( c )||( c == '_' ));
-		f = false;
+			c = *++input;
+		} while( is_ident_2( c ));
+		//
+		//	But before we assume its an identifier, it could be
+		//	a register name...
+		//
 		for( token_defn *look = fixed_register; look->text != NULL; look++ ) {
-			if(( tok->len == look->len )&&iscasehead( look->text, tok->start )) {
+			if(( tok->len == look->len ) && iscasehead( look->text, tok->start )) {
 				tok->tok = look->token;
-				f = true;
-				break;
+				return( input );
 			}
 		}
-		if( !f ) tok->tok = TOK_SYMBOL;
+		tok->tok = TOK_SYMBOL;
 		return( input );
+	}
+	//
+	//	Quoted characters or strings.
+	//
+	if( option_flags & LEGACY_SYNTAX ) {
+		//
+		//	Here there needs to be specific code to handle the legacy
+		//	handling of these elements.
+		//
+		//	"Quoted" string constants are delimted with the slash
+		//	symbol, thus:	/Example text/
+		//
+		//	Literal characters as values are preceeded only with a
+		//	single quote, no "closing quote" is required. The following
+		//	is a quoted dollar symbol:	'$
+		//
+		//	Due to the legacy nature of this system, the content
+		//	of the character or string is limited.  I assume this
+		//	is normal for the state of programming at that time.
+		//
+		if( c == QUOTE ) {
+			tok->len++;
+			if(( c = *++input ) == EOS ) {
+				tok->tok = TOK_LEGACY_CHARACTER;
+				return( input );
+			}
+			tok->len++;
+			tok->tok = TOK_LEGACY_CHARACTER;
+			return( input + 1 );
+		}
+		if( c == SLASH ) {
+			char	*peek, p;
+			int	l;
+			bool	warn;
+			
+			//
+			//	The use of the SLASH for quoted strings clashes
+			//	with the use of it for division.  I do not know
+			//	of a clean way of resolving this given the manner
+			//	in which this program is structured.
+			//
+			l = 1;
+			peek = input + 1;
+			warn = false;
+			while( true ) {
+				if(( p = *peek++ ) == EOS ) {
+					log_warning( "Unterminated legacy string constant?" );
+					break;
+				}
+				l++;
+				if( p == SLASH ) {
+					//
+					//	End of legacy string!
+					//
+					if( warn ) log_warning( "Invalid legacy constant value?" );
+					tok->len = l;
+					tok->tok = TOK_LEGACY_STRING;
+					return( peek );
+				}
+				if( !isalnum( p ) && !isspace( p )) warn = true;
+			}
+			//
+			//	Falling out of the above loop implies the potential
+			//	for a malformed legacy string - which might actually
+			//	be just a normal division symbol!
+			//
+		}
 	}
 	if(( c == QUOTE )||( c == QUOTES )) {
 		q = c;
@@ -1000,24 +1417,26 @@ static char *get_token( char *input, a_token *tok ) {
 			input++;
 			tok->len++;
 		}
-		tok->tok = TOK_STRING;
+		tok->tok = ( c == QUOTES )? TOK_STRING: TOK_CHARACTER;
 		return( input );
 	}
-	f = false;
+	//
+	//	Specific operators and symbols.
+	//
 	for( token_defn *look = fixed_tokens; look->text != NULL; look++ ) {
 		if( ishead( look->text, input )) {
 			tok->tok = look->token;
 			tok->len = look->len;
 			input += look->len;
-			f = true;
-			break;
+			return( input );
 		}
 	}
-	if( !f ) {
-		tok->tok = TOK_ERROR;
-		tok->len = 1;
-		input += 1;
-	}
+	//
+	//	An unrecognised symbol in the input stream.
+	//
+	tok->tok = TOK_ERROR;
+	tok->len = 1;
+	input += 1;
 	return( input );
 }
 
@@ -1466,7 +1885,8 @@ static int evaluate_tree( a_token *here, assemble_phase pass ) {
 		case TOK_VALUE: {
 			return( numeric_value( here->start , here->len ));
 		}
-		case TOK_STRING: {
+		case TOK_STRING:
+		case TOK_CHARACTER: {
 			char	*s;
 			int	l;
 			int	v;
@@ -1476,6 +1896,23 @@ static int evaluate_tree( a_token *here, assemble_phase pass ) {
 			v = character_value( &s, &l );
 			if( l ) log_error( "Invalid character constant" );
 			return( v );
+		}
+		case TOK_LEGACY_STRING:
+		case TOK_LEGACY_CHARACTER: {
+			char	c;
+			//
+			//	The character to return is always the one
+			//	after the symbol.
+			//
+			if(( c = here->start[ 1 ]) == EOS ) {
+				//
+				//	We are going to assume that in this
+				//	(odd case) the programmer anticipates
+				//	a SPACE is used instead.
+				//
+				return( SPACE );
+			}
+			return( c );
 		}
 		case TOK_PLUS: {
 			return( evaluate_tree( here->a, pass ) + evaluate_tree( here->b, pass ));
@@ -1589,6 +2026,9 @@ static a_token *organise_atomic( a_token *list, resync *toks, a_token **tree, bo
 		}
 		case TOK_VALUE:
 		case TOK_STRING:
+		case TOK_LEGACY_STRING:
+		case TOK_CHARACTER:
+		case TOK_LEGACY_CHARACTER:
 		case TOK_SYMBOL: {
 			*tree = list;
 			list = list->b;
@@ -1916,20 +2356,20 @@ static bool analyse_arg( char *input, arg_data *result, assemble_phase pass ) {
 //	Given a string, return one (or more) values which
 //	the evaluation of the string results in.
 //
-//	We are going to do something underhand(ish):  If
-//	max is 1 (ie the caller is looking only for a single
-//	value then we will not split strings.  If max is more
-//	than one the a single *as an isolated value* will
-//	be broken down into a series of values byte by byte.
+//	When split is true then we will split strings into
+//	a series of byte values, otherwise only the first
+//	value will be returned (with warning generated).
 //
-static int analyse_value( char *input, assemble_phase pass, int max, word *result ) {
+static int analyse_value( char *input, assemble_phase pass, bool split, int max, word *result ) {
 	a_token	*head, **tail, *ptr, *look;
 	resync	sync;
 	int	count;
 	
 	//
 	//	Start by converting the input into a linked
-	//	series of token records.
+	//	series of token records (all deconstruction
+	//	data is kept on the stack to simplify memory
+	//	clean up on return from routine).
 	//
 	tail = &head;
 	do {
@@ -1961,9 +2401,9 @@ static int analyse_value( char *input, assemble_phase pass, int max, word *resul
 			look = look->b;
 		}
 		//
-		//	Are we "de string ing" an isolated string value?
+		//	Are we "de-string-ing" a value?
 		//
-		if(( max > 1 )&&( head->tok == TOK_STRING )&&( head->b->tok == TOK_EOS )) {
+		if( split && (( head->tok == TOK_STRING )||( head->tok == TOK_LEGACY_STRING ))) {
 			char	*s;
 			int	l;
 
@@ -2026,15 +2466,18 @@ static int analyse_value( char *input, assemble_phase pass, int max, word *resul
 ////////////////////////////////////////////////////////////////////////
 
 static word last_pc = 0;
+static bool possible_wrap = false;
 
 static word advance_pc( word pc, word step ) {
-	if( pc < last_pc ) log_error( "Address advance rolls through $0000" );
-	last_pc = pc;	
+	if(( pc < last_pc )&& possible_wrap ) log_warning( "Address advance rolls through $0000" );
+	last_pc = pc;
+	possible_wrap = true;
 	return( pc + step );
 }
 
 static word set_pc( word pc ) {
 	last_pc = pc;
+	possible_wrap = false;
 	return( pc );
 }
 
@@ -2117,8 +2560,7 @@ static bool process_machine_inst( int line, char *opcode, char *arg, assemble_ph
 			//	e	->	Extension modifications
 			//	a	->	Argument modifications
 			//
-			//DEBUG
-			if( debug_level ) printf( "Decode:%d|%s|%s|\n", line, o->name, e->extn );
+			if( option_flags & DEBUG_ENABLE ) printf( "Decode:%d|%s|%s|\n", line, o->name, e->extn );
 			//
 			//	Build the base machine instruction value.
 			//
@@ -2373,9 +2815,8 @@ static bool process_machine_inst( int line, char *opcode, char *arg, assemble_ph
 			//	Output instruction (if appropiate)
 			//
 			if( pass == GENERATOR_PHASE ) {
-				printf( "%04X", this_address );
-				for( i = 0; i < len; i++ ) printf( " %02X", inst[ i ]);
-				printf( "\n" );
+				set_address( this_address );
+				for( i = 0; i < len; i++ ) add_byte( inst[ i ]);
 			}
 			//
 			//	Move this address forward
@@ -2400,7 +2841,7 @@ static bool process_machine_inst( int line, char *opcode, char *arg, assemble_ph
 static bool asm_equ( int line, char *label, char *opcode, char *arg, assemble_phase pass ) {
 	word	val;
 	
-	if( analyse_value( arg, pass, 1, &val ) == 1 ) {
+	if( analyse_value( arg, pass, false, 1, &val ) == 1 ) {
 		//
 		//	Have value, set label
 		//
@@ -2433,7 +2874,7 @@ static bool asm_setdp( int line, char *label, char *opcode, char *arg, assemble_
 			ret = false;
 		}
 	}
-	if( analyse_value( arg, pass, 1, &val ) == 1 ) {
+	if( analyse_value( arg, pass, false, 1, &val ) == 1 ) {
 		//
 		//	Have value, set virtual DP
 		//
@@ -2451,7 +2892,7 @@ static bool asm_setdp( int line, char *label, char *opcode, char *arg, assemble_
 static bool asm_org( int line, char *label, char *opcode, char *arg, assemble_phase pass ) {
 	word	val;
 
-	if( analyse_value( arg, pass, 1, &val ) == 1 ) {
+	if( analyse_value( arg, pass, false, 1, &val ) == 1 ) {
 		//
 		//	Have value, set this address
 		//
@@ -2490,24 +2931,23 @@ static bool _asm_db( int line, char *label, char *opcode, char *arg, assemble_ph
 			ret = false;
 		}
 	}
-	if(( l = analyse_value( arg, pass, MAX_CONSTANTS, constants )) <= 0 ) {
+	if(( l = analyse_value( arg, pass, true, MAX_CONSTANTS, constants )) <= 0 ) {
 		log_error( "Error in DB constants" );
 		return( false );
 	}
 	if( pass == GENERATOR_PHASE ) {
-		printf( "%04X", this_address );
+		set_address( this_address );
 		for( int i = 0; i < l; i++ ) {
 			if(( H( constants[ i ]) != 0 )&&( H( constants[ i ]) != 0xff )) log_error( "Byte contant in DB too big" );
 			if( s_flag ) {
 				if( L( constants[ i ]) & 0x80 ) log_error( "Invalid DB value in top bit terminated data" );
-				printf( " %02X", L( constants[ i ])|(( i == l-1 )? 0x80: 0 ));
+				add_byte( L( constants[ i ])|(( i == l-1 )? 0x80: 0 ));
 			}
 			else {
-				printf( " %02X", L( constants[ i ]));
+				add_byte( L( constants[ i ]));
 			}
 		}
-		if( n_flag ) printf( " %02X", 0 );
-		printf( "\n" );
+		if( n_flag ) add_byte( 0 );
 	}
 	this_address = advance_pc( this_address, l + ( n_flag? 1: 0 ));
 	return( ret );
@@ -2543,16 +2983,16 @@ static bool asm_dw( int line, char *label, char *opcode, char *arg, assemble_pha
 			ret = false;
 		}
 	}
-	if(( len = analyse_value( arg, pass, MAX_CONSTANTS, constants )) <= 0 ) {
+	if(( len = analyse_value( arg, pass, true, MAX_CONSTANTS, constants )) <= 0 ) {
 		log_error( "Error in constants" );
 		return( false );
 	}
 	if( pass == GENERATOR_PHASE ) {
-		printf( "%04X", this_address );
+		set_address( this_address );
 		for( int i = 0; i < len; i++ ) {
-			printf( " %02X %02X", H( constants[ i ]), L( constants[ i ]));
+			add_byte( H( constants[ i ]));
+			add_byte( L( constants[ i ]));
 		}
-		printf( "\n" );
 	}
 	this_address = advance_pc( this_address, ( len << 1 ));
 	return( ret );
@@ -2574,7 +3014,7 @@ static bool asm_ds( int line, char *label, char *opcode, char *arg, assemble_pha
 			ret = false;
 		}
 	}
-	if( analyse_value( arg, pass, 1, &val ) == 1 ) {
+	if( analyse_value( arg, pass, false, 1, &val ) == 1 ) {
 		this_address = advance_pc( this_address, val );
 		return( true );
 	}
@@ -2586,7 +3026,7 @@ static bool asm_align( int line, char *label, char *opcode, char *arg, assemble_
 	word	val;
 	int	s;
 	
-	if( analyse_value( arg, pass, 1, &val ) == 1 ) {
+	if( analyse_value( arg, pass, false, 1, &val ) == 1 ) {
 		if( val == 0 ) {
 			log_error( "Zero alignment invalid" );
 			return( false );
@@ -2618,6 +3058,75 @@ static bool asm_align( int line, char *label, char *opcode, char *arg, assemble_
 	}
 	log_error( "Error calculating alignment in ALIGN" );
 	return( false );
+}
+
+
+
+
+static bool _asm_fill( int line, char *label, char *opcode, char *arg, assemble_phase pass, bool is_fill ) {
+	word	constants[ 2 ],
+		fill,
+		count;
+	int	l;
+	bool	ret;
+
+	ret = true;
+	if( label ) {
+		if( !set_symbol( label, this_address, pass )) {
+			if( pass == GATHER_PHASE ) {
+				log_error( "Duplicate label for FILL/RZB" );
+			}
+			else {
+				log_error( "Inconsistent labelling for FILL/RZB" );
+			}
+			ret = false;
+		}
+	}
+	if(( l = analyse_value( arg, pass, false, 2, constants )) < 1 ) {
+		log_error( "Error in FILL/RZB constants" );
+		return( false );
+	}
+	if( is_fill ) {
+		// FILL value, count	Fill memory space
+		if( l != 2 ) {
+			log_error( "FILL argument missing" );
+			return( false );
+		}
+		fill = constants[ 0 ];
+		count = constants[ 1 ];
+	}
+	else {
+		// RZB count{,value}	Reserve zero bytes
+		count = constants[ 0 ];
+		if( l > 1 ) {
+			fill = constants[ 1 ];
+		}
+		else {
+			fill = 0x00;
+		}
+	}
+	if(( pass != GENERATOR_PHASE )&&( count > MAX_FILL )) {
+		log_warning( "FILL/RZB too big, resetting" );
+		count = 0;
+	}
+	if(( pass == GENERATOR_PHASE )&&( count > 0 )) {
+		if(( H( fill ) != 0 )&&( H( fill ) != 0xff )) log_error( "Filler in FILL/RZB not 8 bit value" );
+		set_address( this_address );
+		for( int i = 0; i < count; i++ ) add_byte( L( fill ));
+	}
+	this_address = advance_pc( this_address, count );
+	return( ret );
+}
+
+
+
+
+static bool asm_fill( int line, char *label, char *opcode, char *arg, assemble_phase pass ) {
+	return( _asm_fill( line, label, opcode, arg,  pass, true ) );
+}
+
+static bool asm_rzb( int line, char *label, char *opcode, char *arg, assemble_phase pass ) {
+	return( _asm_fill( line, label, opcode, arg,  pass, false ) );
 }
 
 static bool asm_unsupported( int line, char *label, char *opcode, char *arg, assemble_phase pass ) {
@@ -2694,7 +3203,7 @@ static asm_command directives[] = {
 	//
 	//	FCS Identical to FCC, but the final byte has its top
 	//	bit set to mark the end of the data. Other bytes are
-	//	check to ensure their top bits are not set.
+	//	checked to ensure their top bits are not set.
 	//
 	{ "db",		asm_db		},
 	{ "fcb",	asm_db		},
@@ -2713,8 +3222,8 @@ static asm_command directives[] = {
 	{ "ds",		asm_ds		},	// Force skip in target address
 	{ "rmb",	asm_ds		},
 	//
-	{ "fill",	asm_unsupported	},	// FILL value, count	Fill memory space
-	{ "rzb",	asm_unsupported },	// RZB count{,value}	Reserve zero bytes
+	{ "fill",	asm_fill	},	// FILL value, count	Fill memory space
+	{ "rzb",	asm_rzb		},	// RZB count{,value}	Reserve zero bytes
 	//
 	//	Move the current target address forward until
 	//	supports an alignment of "value" bytes.  This
@@ -2761,37 +3270,74 @@ static directive find_directive( char *command ) {
 //	Look forward through a string, but never past EOS
 //	and skip over strings as a single "character".
 //
-//	NOTE:	This routine is broken, it does not skip over
+//	Returns address of the next byte to be examined.
+//
+//	NOTES:
+//
+//	1/	This routine is broken, it does not skip over
 //		strings containing escaped quote(s)
 //		properly.
 //
+//	2/	Legacy syntax support also has an impact with
+//		respect to support of character constants and
+//		alternative string delimiting (/).
+//
 static char *look_forward( char *from ) {
-	char	q, c;
+	char	q;
 
 	switch(( q = *from )) {
 		case EOS: {
-			break;
+			return( from );
 		}
+		case SLASH:
 		case QUOTE:
 		case QUOTES: {
-			from++;
-			while((( c = *from ) != EOS )&&( c != q )) {
-				from++;
-				if(( c == ESCAPE )&&( *from != EOS )) from++;
-			}
-			if( c == EOS ) {
-				log_error( "Unmatched quote(s)" );
+			char	*peek, c;
+			
+			peek = from + 1;
+			if( option_flags & LEGACY_SYNTAX ) {
+				//
+				//	Legacy and a QUOTE means there
+				//	is no matching quote to search for.
+				//
+				if( q == QUOTE ) {
+					if( *peek != EOS ) peek++;
+					return( peek );
+				}
 			}
 			else {
-				from++;
+				//
+				//	Non-legacy and a SLASH is just
+				//	another character.
+				//
+				if( q == SLASH ) return( peek );
 			}
-			break;
+			while((( c = *peek ) != EOS )&&( c != q )) {
+				peek++;
+				if(( c == ESCAPE )&&( *peek != EOS )) peek++;
+			}
+			if( c == EOS ) {
+				//
+				//	If we were matching a slash (legacy string)
+				//	and we find no matching pair we assume its
+				//	a divide symbol, so break out of here.
+				//
+				if( q == SLASH ) break;
+				//
+				//	otherwise there an error.
+				//
+				log_error( "Unmatched delimiter on constant" );
+			}
+			else {
+				peek++;
+			}
+			return( peek );
 		}
 		default: {
-			from++;
+			break;
 		}
 	}
-	return( from );
+	return( from + 1 );
 }
 			
 static bool break_line( char *line, char **label, char **opcode, char **arg, char **comment ) {
@@ -2800,10 +3346,10 @@ static bool break_line( char *line, char **label, char **opcode, char **arg, cha
 	//
 	//	Label at start of line?
 	//
-	if( isalpha( *line )||( *line == '_' )) {
+	if( is_ident_1( *line )) {
 		*label = line;
-		while( isalnum( *line )||( *line == '_' )) line++;
-		if(( *line != EOS )&&( !isspace( *line ))&&( *line != ':' )) {
+		while( is_ident_2( *line )) line++;
+		if(( *line != EOS )&&( !isspace( *line ))&&( *line != COLON )) {
 			log_error( "Label incorrectly terminated" );
 			return( false );
 		}
@@ -2890,8 +3436,7 @@ static int parse_input( FILE *input, assemble_phase pass ) {
 		//	What does it contain?
 		//
 		if( break_line( line, &label, &opcode, &arg, &comment )) {
-			//DEBUG
-			if( debug_level ) printf( "Input:%d|%s|%s|%s|%s\n", count, label, opcode, arg, comment );
+			if( option_flags & DEBUG_ENABLE ) printf( "Input:%d|%s|%s|%s|%s\n", count, label, opcode, arg, comment );
 			//
 			//	Anything to do?
 			//
@@ -2926,13 +3471,13 @@ static int parse_input( FILE *input, assemble_phase pass ) {
 			log_error( "Source line incorrectly formed" );
 		}
 		//
-		//	Errors?
+		//	Errors or Warnings?
 		//
 		if(( err = error_text( 0 )) != NULL ) {
 			int	n = 0;
 
 			do {
-				fprintf( stderr, "Line %d: %s.\n", count, err );
+				fprintf( stderr, "Error Line %d: %s.\n", count, err );
 				n++;
 			} while (( err = error_text( n )) != NULL );
 			//
@@ -2940,9 +3485,89 @@ static int parse_input( FILE *input, assemble_phase pass ) {
 			//
 			errors++;
 		}
+		if(( err = warning_text( 0 )) != NULL ) {
+			int	n = 0;
+
+			do {
+				fprintf( stderr, "Warning Line %d: %s.\n", count, err );
+				n++;
+			} while (( err = warning_text( n )) != NULL );
+		}
 		reset_error_cache();
+		reset_warning_cache();
 	}
 	return( errors == 0 );
+}
+
+//
+//	Implement a simplistic argument processing system
+//
+typedef struct {
+	char		*name, *help;
+	int		set, reset;
+} option;
+static option options[] = {
+	{	"--text",		"\t\tOutput text hexadecimal values",	DISPLAY_TEXT,		DISPLAY_MASK		},
+	{	"--intel",		"\t\tOutput Intel Hex format data",	DISPLAY_INTEL,		DISPLAY_MASK		},
+	{	"--motorola",		"\tOutput Motorola S records",		DISPLAY_MOTOROLA,	DISPLAY_MASK		},
+	{	"--no-output",		"\tDo not output any code",		DISPLAY_NOTHING,	DISPLAY_MASK		},
+	{	"--stdout",		"\tSend output to console",		DISPLAY_STDOUT,		0			},
+	{	"--legacy-syntax",	"\tAccept legacy Motorola syntax",	LEGACY_SYNTAX,		0			},
+	{	"--symbols",		"\tOutput Symbol table",		DISPLAY_SYMBOLS,	0			},
+	{	"--listing",		"\tOutput an assembly listing",		DISPLAY_LISTING,	0			},
+	{	"--dump-opcodes",	"\tDisplay op-codes table",		DISPLAY_OPCODES,	0			},
+	{	"--help",		"\t\tDisplay this help information",	DISPLAY_HELP,		0			},
+	{	"--debug",		"\t\tEnable additonal debugging output",DEBUG_ENABLE,		0			},
+	{	NULL														}
+};
+
+//
+//	Handed the whole argument list so look for the filename
+//	and return its index (while gathering the arguments on the way).
+//
+//	Return 0 or -ve number if the program should exit as a result of
+//	this processing.
+//
+static int parse_arguments( int argc, char **argv ) {
+	int	a;
+	option	*o;
+
+	//
+	//	Step through arguments..
+	//
+	for( a = 1; a < argc; a++ ) {
+		if( strncmp( argv[ a ], "--", 2 ) == 0 ) {
+			for( o = options; o->name != NULL; o++ ) {
+				if( strcmp( argv[ a ], o->name ) == 0 ) break;
+			}
+			if( o->name != NULL ) {
+				option_flags = ( option_flags & ~o->reset ) | o->set;
+			}
+			else {
+				fprintf( stderr, "Unrecognised option '%s'.\n", argv[ a ]);
+				return( -1 );
+			}
+		}
+		else break;
+	}
+	//
+	//	Analyse what we found..
+	//
+	if( option_flags & DISPLAY_HELP ) {
+		printf( "Usage: %s [ {options} ] {filename}\nOptions:-\n", argv[ 0 ]);
+		for( o = options; o->name != NULL; o++ ) printf( "\t%s%s\n", o->name, o->help );
+		return( 0 );
+	}
+	if( option_flags & DISPLAY_OPCODES ) {
+		printf( "Op-codes dump:\n" );
+		dump_opcodes();
+		return( 0 );
+	}
+	if(( option_flags & DISPLAY_MASK ) == 0 ) {
+		printf( "Output format required.\n" );
+		return( -2 );
+	}
+	return(( a >= argc )? 0: a );
 }
 
 ////////////////////////////////////////////////////////////////////////
@@ -2955,22 +3580,14 @@ static int parse_input( FILE *input, assemble_phase pass ) {
 
 int main( int argc, char *argv[] ) {
 	FILE	*source;
-	int	last, count;
+	int	file, last, count;
 	char	*dl;
 
-	if( argc != 2 ) {
-		fprintf( stderr, "Usage: %s {filename}\n", argv[ 0 ]);
-		return( 1 );
-	}
-	if( strcmp( argv[ 1 ], "--dump_opcodes" ) == 0 ) {
-		dump_opcodes();
-		return( 0 );
-	}
-	if(( dl = getenv( "ASM6809_DEBUG_LEVEL" )) != NULL ) {
-		debug_level = atoi( dl );
-		fprintf( stderr, "debug_level=%d\n", debug_level );
-	}
-	if(( source = fopen( argv[ 1 ], "r" )) == NULL ) {
+	//
+	//	Start with the arguments
+	//
+	if(( file = parse_arguments( argc, argv )) <= 0 ) return( -file );
+	if(( source = fopen( argv[ file ], "r" )) == NULL ) {
 		fprintf( stderr, "Unable to open file '%s', error '%m'.\n", argv[ 1 ]);
 		return( 2 );
 	}
@@ -2996,7 +3613,7 @@ int main( int argc, char *argv[] ) {
 		//
 		rewind( source );
 		reset_conditions();
-		//show_symbols( sym_sort );
+		if( option_flags & DEBUG_ENABLE ) show_symbols( sym_sort );
 		if( !parse_input( source, NORMALISE_PHASE )) {
 			//
 			//	Display error message and exit
@@ -3030,16 +3647,24 @@ int main( int argc, char *argv[] ) {
 	//
 	//	Code generation pass
 	//
-	rewind( source );
-	reset_conditions();
-	if( !parse_input( source, GENERATOR_PHASE )) {
-		fprintf( stderr, "Code generation pass failed.\n" );
-		return( 6 );
+	if( init_output( argv[ file ])) {
+		rewind( source );
+		reset_conditions();
+		if( !parse_input( source, GENERATOR_PHASE )) {
+			end_output();
+			fprintf( stderr, "Code generation pass failed.\n" );
+			return( 6 );
+		}
+		end_output();
+	}
+	else {
+		fprintf( stderr, "Initialisation of output target failed.\n" );
+		return( 7 );
 	}
 	//
 	//	Output complete!
 	//
-	show_symbols( sym_sort );
+	if( option_flags & DISPLAY_SYMBOLS ) show_symbols( sym_sort );
 	//
 	//	Done.
 	//
