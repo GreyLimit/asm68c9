@@ -2544,11 +2544,33 @@ static bool process_machine_inst( int line, char *opcode, char *arg, assemble_ph
 				//	of the op code options as the argument processing code
 				//	cannot make a reliable decision what to call some arguements.
 				//
+				//	If the opcode specifies a page direct mode and the
+				//	argument provided is extended *and* the top byte of
+				//	the extended address is the same as the declared DP
+				//	then we have a match.
+				//
 				if(( a->mode == OP_DIRECT )&&( data.op == OP_EXTENDED )&&( H( data.value ) == direct_page )) break;
+				//
+				//	Immediate values are always 'undefined' and so need
+				//	either an immediate byte or word opcode.
+				//
 				if((( a->mode == OP_IMM_BYTE )||( a->mode == OP_IMM_WORD ))&&( data.op == OP_IMM_UNDEF )) break;
+				//
+				//	Register lists match either a pair of registers or
+				//	a bit map set of registers - depeneding on the number
+				//	of registers provided.
+				//
 				if(( a->mode == OP_REG_PAIR )&&( data.reg_count == 2 )) break;
 				if(( a->mode == OP_REG_LIST )&&( data.reg_count > 0 )) break;
+				//
+				//	An extended argument is also a euphamism for any jump
+				//	or call target address.
+				//
 				if((( a->mode == OP_SRELATIVE )||( a->mode == OP_LRELATIVE ))&&( data.op == OP_EXTENDED )) break;
+				//
+				//	Obviously if the format of the argument actually matches
+				//	the specification of the op-code then we have a winner!
+				//
 				if( data.op == a->mode ) break;
 			}
 			if( a->mode == OP_NONE ) continue;
@@ -2876,10 +2898,24 @@ static bool asm_setdp( int line, char *label, char *opcode, char *arg, assemble_
 	}
 	if( analyse_value( arg, pass, false, 1, &val ) == 1 ) {
 		//
-		//	Have value, set virtual DP
+		//	Have value, set virtual DP.
+		//
+		//	Eight bit values are assumed to be
+		//	the exact value that the direct
+		//	pointer is to be set to.
 		//
 		if(( val >= 0 )&&( val < 256 )) {
 			direct_page = val;
+			return( ret );
+		}
+		//
+		//	Sixteen bit values are OK too, so
+		//	long as the bottom eight bits are zero.
+		//	In this case the top eight bits are
+		//	placed into DP.
+		//
+		if( L( val ) == 0 ) {
+			direct_page = H( val );
 			return( ret );
 		}
 		log_error( "Invalid page number in SETDP" );

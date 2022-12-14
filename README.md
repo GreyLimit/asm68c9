@@ -26,6 +26,8 @@ The assembler has been "tweaked" to (optionally) accept original Motorola format
 *	Character constants are preceded by only a single quote (').
 *	String constants are delimited by the slash character (/).
 
+Some legacy operators are not implemented, yet.  The cause of this is that, so far, I've not pinned down what they are (e.g. the '=' prefix operator; means "top byte of 16 bit word?")
+
 Enabling 'legacy syntax' also enables a few possible warnings relating to potential clashes between the default syntax interpretation against the legacy version.
 
 This may not be enough to assemble every original assembler file (or even most), but should assist in doing so.
