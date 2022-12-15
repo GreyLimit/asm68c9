@@ -37,14 +37,17 @@ Finally, the command line options accepted by the program (as displayed by '--he
 ```
 Usage: asm68c9 [ {options} ] {filename}
 Options:-
-	--hex		Output raw hexadecimal values
+	--hexadecimal	Output text hexadecimal values
 	--intel		Output Intel Hex format data
 	--motorola	Output Motorola S records
+	--listing	Display an assembly listing
+	--no-output	Do not output any code
+	--stdout	Send output to console
 	--legacy-syntax	Accept legacy Motorola syntax
 	--symbols	Output Symbol table
 	--dump-opcodes	Display op-codes table
 	--help		Display this help information
-	--debug		Enable additional debugging output
+	--debug		Enable additonal debugging output
 ```
 
 Jeff
