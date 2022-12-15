@@ -107,12 +107,12 @@ typedef uint16_t word;
 #define DISPLAY_INTEL		00002
 #define DISPLAY_MOTOROLA	00004
 #define DISPLAY_NOTHING		00010
-#define DISPLAY_MASK		(DISPLAY_TEXT|DISPLAY_INTEL|DISPLAY_MOTOROLA|DISPLAY_NOTHING)
-#define DISPLAY_STDOUT		00020
+#define DISPLAY_LISTING		00020
+#define DISPLAY_MASK		(DISPLAY_TEXT|DISPLAY_INTEL|DISPLAY_MOTOROLA|DISPLAY_NOTHING|DISPLAY_LISTING)
+#define DISPLAY_STDOUT		00040
 //
 #define LEGACY_SYNTAX		00100
 #define DISPLAY_SYMBOLS		00200
-#define DISPLAY_LISTING		00400
 //
 #define DISPLAY_OPCODES		01000
 #define DISPLAY_HELP		02000
@@ -672,19 +672,22 @@ static FILE *output_file = NULL;
 
 typedef struct {
 	void	FUNC( init_output )( char *source );
-	void	FUNC( flush_output )( void );
+	void	FUNC( next_line )( int line, char *code );
 	void	FUNC( set_address )( word adrs );
 	void	FUNC( add_byte )( byte data );
 	void	FUNC( end_output )( void );
 } output_api;
 
 //
+//	No Output
+//	---------
+//
 //	A dummy output system which does not output
 //	anything.
 //
 static void _null_init_output( char *source ) {
 }
-static void _null_flush_output( void ) {
+static void _null_next_line( int line, char *code ) {
 }
 static void _null_set_address( word adrs ) {
 }
@@ -693,47 +696,150 @@ static void _null_add_byte( byte data ) {
 static void _null_end_output( void ) {
 }
 
-static output_api _null_output_api = { _null_init_output, _null_flush_output, _null_set_address, _null_add_byte, _null_end_output };
+static output_api _null_output_api = {
+	_null_init_output,
+	_null_next_line,
+	_null_set_address,
+	_null_add_byte,
+	_null_end_output
+};
 
 //
-//	The text output system.
+//	The listing output system.
+//	--------------------------
 //
-static void _text_init_output( char *source ) {
+//	For source code listing these are reuqired.  The buffer is
+//	allocated only if required.
+//
+//	Ensure MAX_SOURCE_OUTPUT_BUFFER <= MAX_OUTPUT_BUFFER
+//
+#define MAX_SOURCE_CODE_BUFFER 80
+#define MAX_SOURCE_OUTPUT_BUFFER 4
+static int this_line = 0;
+static char source_code[ MAX_SOURCE_CODE_BUFFER+1 ];  // +1 for EOS
+
+static void _listing_init_output( char *source ) {
+	buffered_output = 0;
+	buffered_address = 0;
+	this_line = 0;
+}
+static void _listing_flush_output( void ) {
+	int	i;
+	
+	//
+	//	The output format will be:
+	//
+	//	address		%04X
+	//	space
+	//	data		%02X		Repeat to fixed limit
+	//	source		|...		To end of line
+	//
+	if(( buffered_output == 0 )&&( this_line == 0 )) return;
+	if( buffered_output ) {
+		fprintf( output_file, "%04X ", (int)buffered_address );
+		for( i = 0; i < buffered_output; fprintf( output_file, "%02X", (int)output_buffer[ i++ ]));
+		while( i++ < MAX_SOURCE_OUTPUT_BUFFER ) fprintf( output_file, "  " );
+		buffered_address += buffered_output;
+		buffered_output = 0;
+	}
+	else {
+		fprintf( output_file, "     " );
+		for( i = 0; i < MAX_SOURCE_OUTPUT_BUFFER; i++ ) fprintf( output_file, "  " );
+	}
+	if( this_line ) {
+		fprintf( output_file, " |%4d|%s\n", this_line, source_code );
+		this_line = 0;
+	}
+	else {
+		fprintf( output_file, "\n" );
+	}
+}
+static void _listing_next_line( int line, char *code ) {
+	assert( line > 0 );
+	
+	//
+	//	Flush out anything we have pending..
+	//
+	_listing_flush_output();
+	//
+	//	Save this line for later..
+	//
+	strncpy( source_code, code, MAX_SOURCE_CODE_BUFFER );
+	source_code[ MAX_SOURCE_CODE_BUFFER ] = EOS;
+	this_line = line;
+}
+static void _listing_set_address( word adrs ) {
+	word	cur;
+
+	if(( cur = buffered_address + buffered_output ) != adrs ) {
+		if( buffered_output ) _listing_flush_output();
+		buffered_address = adrs;
+	}
+}
+static void _listing_add_byte( byte data ) {
+	output_buffer[ buffered_output++ ] = data;
+	if( buffered_output >= MAX_SOURCE_OUTPUT_BUFFER ) _listing_flush_output();
+}
+
+static void _listing_end_output( void ) {
+	_listing_flush_output();
+}
+
+static output_api _listing_output_api = {
+	_listing_init_output,
+	_listing_next_line,
+	_listing_set_address,
+	_listing_add_byte,
+	_listing_end_output
+};
+
+//
+//	The hexadecimal output system.
+//
+static void _hexadecimal_init_output( char *source ) {
 	buffered_output = 0;
 	buffered_address = 0;
 }
-static void _text_flush_output( void ) {
+static void _hexadecimal_next_line( int line, char *code ) {
+}
+static void _hexadecimal_flush_output( void ) {
 	if( buffered_output ) {
-		fprintf( output_file, "%04x", (int)buffered_address );
-		for( int i = 0; i < buffered_output; fprintf( output_file, " %02x", (int)output_buffer[ i++ ]));
+		fprintf( output_file, "%04X", (int)buffered_address );
+		for( int i = 0; i < buffered_output; fprintf( output_file, " %02X", (int)output_buffer[ i++ ]));
 		fprintf( output_file, "\n" );
 		buffered_address += buffered_output;
 		buffered_output = 0;
 	}
 }
-static void _text_set_address( word adrs ) {
+static void _hexadecimal_set_address( word adrs ) {
 	word	cur;
 
 	if(( cur = buffered_address + buffered_output ) != adrs ) {
-		if( buffered_output ) _text_flush_output();
+		if( buffered_output ) _hexadecimal_flush_output();
 		buffered_address = adrs;
 	}
 }
-static void _text_add_byte( byte data ) {
+static void _hexadecimal_add_byte( byte data ) {
 	output_buffer[ buffered_output++ ] = data;
-	if( buffered_output >= MAX_OUTPUT_BUFFER ) _text_flush_output();
+	if( buffered_output >= MAX_OUTPUT_BUFFER ) _hexadecimal_flush_output();
 }
 
-static void _text_end_output( void ) {
-	_text_flush_output();
+static void _hexadecimal_end_output( void ) {
+	_hexadecimal_flush_output();
 }
 
-static output_api _text_output_api = { _text_init_output, _text_flush_output, _text_set_address, _text_add_byte, _text_end_output };
+static output_api _hexadecimal_output_api = {
+	_hexadecimal_init_output,
+	_hexadecimal_next_line,
+	_hexadecimal_set_address,
+	_hexadecimal_add_byte,
+	_hexadecimal_end_output
+};
 
 //
 //	The Motorola S record output system.
 //
-static void _srec_init_output( char *source ) {
+static void _motorola_init_output( char *source ) {
 	int	l;
 	byte	s;
 	
@@ -758,7 +864,9 @@ static void _srec_init_output( char *source ) {
 	}
 	fprintf( output_file, "%02X\r\n", ~s & 0xff );
 }
-static void _srec_flush_output( void ) {
+static void _motorola_next_line( int line, char *code ) {
+}
+static void _motorola_flush_output( void ) {
 	if( buffered_output ) {
 		byte	s;
 
@@ -773,37 +881,45 @@ static void _srec_flush_output( void ) {
 		buffered_output = 0;
 	}
 }
-static void _srec_set_address( word adrs ) {
+static void _motorola_set_address( word adrs ) {
 	word	cur;
 
 	if(( cur = buffered_address + buffered_output ) != adrs ) {
-		if( buffered_output ) _srec_flush_output();
+		if( buffered_output ) _motorola_flush_output();
 		buffered_address = adrs;
 	}
 }
-static void _srec_add_byte( byte data ) {
+static void _motorola_add_byte( byte data ) {
 	output_buffer[ buffered_output++ ] = data;
-	if( buffered_output >= MAX_OUTPUT_BUFFER ) _srec_flush_output();
+	if( buffered_output >= MAX_OUTPUT_BUFFER ) _motorola_flush_output();
 }
 
-static void _srec_end_output( void ) {
+static void _motorola_end_output( void ) {
 	byte	s;
 	
-	_srec_flush_output();
+	_motorola_flush_output();
 	s = H( buffered_address ) + L( buffered_address );
 	fprintf( output_file, "S903%04X%02X\r\n", buffered_address, ~s & 0xff );
 }
 
-static output_api _srec_output_api = { _srec_init_output, _srec_flush_output, _srec_set_address, _srec_add_byte, _srec_end_output };
+static output_api _motorola_output_api = {
+	_motorola_init_output,
+	_motorola_next_line,
+	_motorola_set_address,
+	_motorola_add_byte,
+	_motorola_end_output
+};
 
 //
 //	The Intel Hex record output system.
 //
-static void _hex_init_output( char *source ) {
+static void _intel_init_output( char *source ) {
 	buffered_output = 0;
 	buffered_address = 0;
 }
-static void _hex_flush_output( void ) {
+static void _intel_next_line( int line, char *code ) {
+}
+static void _intel_flush_output( void ) {
 	if( buffered_output ) {
 		byte	s;
 
@@ -818,25 +934,31 @@ static void _hex_flush_output( void ) {
 		buffered_output = 0;
 	}
 }
-static void _hex_set_address( word adrs ) {
+static void _intel_set_address( word adrs ) {
 	word	cur;
 
 	if(( cur = buffered_address + buffered_output ) != adrs ) {
-		if( buffered_output ) _hex_flush_output();
+		if( buffered_output ) _intel_flush_output();
 		buffered_address = adrs;
 	}
 }
-static void _hex_add_byte( byte data ) {
+static void _intel_add_byte( byte data ) {
 	output_buffer[ buffered_output++ ] = data;
-	if( buffered_output >= MAX_OUTPUT_BUFFER ) _hex_flush_output();
+	if( buffered_output >= MAX_OUTPUT_BUFFER ) _intel_flush_output();
 }
 
-static void _hex_end_output( void ) {
-	_srec_flush_output();
+static void _intel_end_output( void ) {
+	_motorola_flush_output();
 	fprintf( output_file, ":00000001FF\n" );
 }
 
-static output_api _hex_output_api = { _hex_init_output, _hex_flush_output, _hex_set_address, _hex_add_byte, _hex_end_output };
+static output_api _intel_output_api = {
+	_intel_init_output,
+	_intel_next_line,
+	_intel_set_address,
+	_intel_add_byte,
+	_intel_end_output
+};
 
 //
 //	This is the entry point into the output API, we defaullt to
@@ -850,18 +972,23 @@ static bool init_output( char *source ) {
 	suffix = NULL;
 	switch( option_flags & DISPLAY_MASK ) {
 		case DISPLAY_TEXT: {
-			output_routine = &_text_output_api;
+			output_routine = &_hexadecimal_output_api;
 			suffix = ".text";
 			break;
 		}
 		case DISPLAY_INTEL: {
-			output_routine = &_hex_output_api;
+			output_routine = &_intel_output_api;
 			suffix = ".hex";
 			break;
 		}
 		case DISPLAY_MOTOROLA: {
-			output_routine = &_srec_output_api;
+			output_routine = &_motorola_output_api;
 			suffix = ".srec";
+			break;
+		}
+		case DISPLAY_LISTING: {
+			output_routine = &_listing_output_api;
+			suffix = ".text";
 			break;
 		}
 		case DISPLAY_NOTHING: {
@@ -887,8 +1014,8 @@ static bool init_output( char *source ) {
 	FUNC( output_routine->init_output )( source );
 	return( true );
 }
-static void flush_output( void ) {
-	FUNC( output_routine->flush_output )();
+static void next_line( int line, char *code ) {
+	FUNC( output_routine->next_line )( line, code );
 }
 static void set_address( word adrs ) {
 	FUNC( output_routine->set_address )( adrs );
@@ -3465,9 +3592,12 @@ static int parse_input( FILE *input, assemble_phase pass ) {
 	while( end_not_reached && fgets( line, BUFFER, input )) {
 		line[ strlen( line ) -1 ] = EOS;
 		//
-		//	Add one to the line count
+		//	Add one to the line count and
+		//	pass the line to the output system
+		//	if we are generating code.
 		//
 		count++;
+		if( pass == GENERATOR_PHASE ) next_line( count, line );
 		//
 		//	What does it contain?
 		//
@@ -3543,14 +3673,14 @@ typedef struct {
 	int		set, reset;
 } option;
 static option options[] = {
-	{	"--text",		"\t\tOutput text hexadecimal values",	DISPLAY_TEXT,		DISPLAY_MASK		},
+	{	"--hexadecimal",	"\tOutput text hexadecimal values",	DISPLAY_TEXT,		DISPLAY_MASK		},
 	{	"--intel",		"\t\tOutput Intel Hex format data",	DISPLAY_INTEL,		DISPLAY_MASK		},
 	{	"--motorola",		"\tOutput Motorola S records",		DISPLAY_MOTOROLA,	DISPLAY_MASK		},
+	{	"--listing",		"\tDisplay an assembly listing",	DISPLAY_LISTING,	DISPLAY_MASK		},
 	{	"--no-output",		"\tDo not output any code",		DISPLAY_NOTHING,	DISPLAY_MASK		},
 	{	"--stdout",		"\tSend output to console",		DISPLAY_STDOUT,		0			},
 	{	"--legacy-syntax",	"\tAccept legacy Motorola syntax",	LEGACY_SYNTAX,		0			},
 	{	"--symbols",		"\tOutput Symbol table",		DISPLAY_SYMBOLS,	0			},
-	{	"--listing",		"\tOutput an assembly listing",		DISPLAY_LISTING,	0			},
 	{	"--dump-opcodes",	"\tDisplay op-codes table",		DISPLAY_OPCODES,	0			},
 	{	"--help",		"\t\tDisplay this help information",	DISPLAY_HELP,		0			},
 	{	"--debug",		"\t\tEnable additonal debugging output",DEBUG_ENABLE,		0			},
