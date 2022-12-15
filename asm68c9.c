@@ -870,7 +870,7 @@ static void _motorola_flush_output( void ) {
 	if( buffered_output ) {
 		byte	s;
 
-		s = H( buffered_address ) + L( buffered_address );
+		s = H( buffered_address ) + L( buffered_address ) + buffered_output;
 		fprintf( output_file, "S1%02X%04X", 3 + buffered_output, buffered_address );
 		for( int i = 0; i < buffered_output; i++ ) {
 			s += output_buffer[ i ];
@@ -898,7 +898,7 @@ static void _motorola_end_output( void ) {
 	byte	s;
 	
 	_motorola_flush_output();
-	s = H( buffered_address ) + L( buffered_address );
+	s = H( buffered_address ) + L( buffered_address ) + 3;
 	fprintf( output_file, "S903%04X%02X\r\n", buffered_address, ~s & 0xff );
 }
 
