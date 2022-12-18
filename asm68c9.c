@@ -84,6 +84,7 @@ typedef uint16_t word;
 #define PERCENT		'%'
 #define COLON		':'
 #define SPACE		' '
+#define AT		'@'
 
 //
 //	Syntactic sugar
@@ -1398,7 +1399,7 @@ static bool is_ident_2( char c ) {
 //	Identification of a number; first then subsequent characters:
 //
 static bool is_number_1( char c ) {
-	return( isdigit( c )||( c == DOLLAR )||( c == PERCENT ));
+	return( isdigit( c )||( c == DOLLAR )||( c == PERCENT )||( c == AT ));
 }
 static bool is_number_2( char c ) {
 	return( isalnum( c ));
@@ -1866,7 +1867,7 @@ static int numeric_value( char *text, int len ) {
 	//	Adjust base?
 	//
 	switch( *text ) {
-		case '$': {
+		case DOLLAR: {
 			//
 			//	"$" on its own is a symbolic "this address"
 			//	reference.
@@ -1880,12 +1881,13 @@ static int numeric_value( char *text, int len ) {
 			len--;
 			break;
 		}
-		case '%': {
+		case PERCENT: {
 			base = 2;
 			text++;
 			len--;
 			break;
 		}
+		case AT:
 		case '0': {
 			base = 8;
 			text++;
