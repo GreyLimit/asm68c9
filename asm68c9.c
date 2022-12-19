@@ -675,6 +675,7 @@ typedef struct {
 	void	FUNC( init_output )( char *source );
 	void	FUNC( next_line )( int line, char *code );
 	void	FUNC( set_address )( word adrs );
+	void	FUNC( set_start )( word adrs );
 	void	FUNC( add_byte )( byte data );
 	void	FUNC( end_output )( void );
 } output_api;
@@ -692,6 +693,8 @@ static void _null_next_line( int line, char *code ) {
 }
 static void _null_set_address( word adrs ) {
 }
+static void _null_set_start( word adrs ) {
+}
 static void _null_add_byte( byte data ) {
 }
 static void _null_end_output( void ) {
@@ -701,6 +704,7 @@ static output_api _null_output_api = {
 	_null_init_output,
 	_null_next_line,
 	_null_set_address,
+	_null_set_start,
 	_null_add_byte,
 	_null_end_output
 };
@@ -716,13 +720,13 @@ static output_api _null_output_api = {
 //
 #define MAX_SOURCE_CODE_BUFFER 80
 #define MAX_SOURCE_OUTPUT_BUFFER 4
-static int this_line = 0;
-static char source_code[ MAX_SOURCE_CODE_BUFFER+1 ];  // +1 for EOS
+static int _listing_this_line = 0;
+static char _listing_source_code[ MAX_SOURCE_CODE_BUFFER+1 ];  // +1 for EOS
 
 static void _listing_init_output( char *source ) {
 	buffered_output = 0;
 	buffered_address = 0;
-	this_line = 0;
+	_listing_this_line = 0;
 }
 static void _listing_flush_output( void ) {
 	int	i;
@@ -735,7 +739,7 @@ static void _listing_flush_output( void ) {
 	//	data		%02X		Repeat to fixed limit
 	//	source		|...		To end of line
 	//
-	if(( buffered_output == 0 )&&( this_line == 0 )) return;
+	if(( buffered_output == 0 )&&( _listing_this_line == 0 )) return;
 	if( buffered_output ) {
 		fprintf( output_file, "%04X ", (int)buffered_address );
 		for( i = 0; i < buffered_output; fprintf( output_file, "%02X", (int)output_buffer[ i++ ]));
@@ -747,9 +751,9 @@ static void _listing_flush_output( void ) {
 		fprintf( output_file, "     " );
 		for( i = 0; i < MAX_SOURCE_OUTPUT_BUFFER; i++ ) fprintf( output_file, "  " );
 	}
-	if( this_line ) {
-		fprintf( output_file, " |%4d|%s\n", this_line, source_code );
-		this_line = 0;
+	if( _listing_this_line ) {
+		fprintf( output_file, " |%4d|%s\n", _listing_this_line, _listing_source_code );
+		_listing_this_line = 0;
 	}
 	else {
 		fprintf( output_file, "\n" );
@@ -765,18 +769,19 @@ static void _listing_next_line( int line, char *code ) {
 	//
 	//	Save this line for later..
 	//
-	strncpy( source_code, code, MAX_SOURCE_CODE_BUFFER );
-	source_code[ MAX_SOURCE_CODE_BUFFER ] = EOS;
-	this_line = line;
+	strncpy( _listing_source_code, code, MAX_SOURCE_CODE_BUFFER );
+	_listing_source_code[ MAX_SOURCE_CODE_BUFFER ] = EOS;
+	_listing_this_line = line;
 }
 static void _listing_set_address( word adrs ) {
-	word	cur;
-
-	if(( cur = buffered_address + buffered_output ) != adrs ) {
+	if(( buffered_address + buffered_output ) != adrs ) {
 		if( buffered_output ) _listing_flush_output();
 		buffered_address = adrs;
 	}
 }
+static void _listing_set_start( word adrs ) {
+}
+
 static void _listing_add_byte( byte data ) {
 	output_buffer[ buffered_output++ ] = data;
 	if( buffered_output >= MAX_SOURCE_OUTPUT_BUFFER ) _listing_flush_output();
@@ -790,12 +795,14 @@ static output_api _listing_output_api = {
 	_listing_init_output,
 	_listing_next_line,
 	_listing_set_address,
+	_listing_set_start,
 	_listing_add_byte,
 	_listing_end_output
 };
 
 //
 //	The hexadecimal output system.
+//	------------------------------
 //
 static void _hexadecimal_init_output( char *source ) {
 	buffered_output = 0;
@@ -813,12 +820,12 @@ static void _hexadecimal_flush_output( void ) {
 	}
 }
 static void _hexadecimal_set_address( word adrs ) {
-	word	cur;
-
-	if(( cur = buffered_address + buffered_output ) != adrs ) {
+	if(( buffered_address + buffered_output ) != adrs ) {
 		if( buffered_output ) _hexadecimal_flush_output();
 		buffered_address = adrs;
 	}
+}
+static void _hexadecimal_set_start( word adrs ) {
 }
 static void _hexadecimal_add_byte( byte data ) {
 	output_buffer[ buffered_output++ ] = data;
@@ -833,19 +840,29 @@ static output_api _hexadecimal_output_api = {
 	_hexadecimal_init_output,
 	_hexadecimal_next_line,
 	_hexadecimal_set_address,
+	_hexadecimal_set_start,
 	_hexadecimal_add_byte,
 	_hexadecimal_end_output
 };
 
 //
 //	The Motorola S record output system.
+//	------------------------------------
 //
+
+static bool _motorola_have_start = false;
+static word _motorola_start_address = 0x0000;
+static word _motorola_srec_count = 0;
+
 static void _motorola_init_output( char *source ) {
 	int	l;
 	byte	s;
 	
 	buffered_output = 0;
 	buffered_address = 0;
+	_motorola_have_start = false;
+	_motorola_start_address = 0x0000;
+	_motorola_srec_count = 0;
 	//
 	//	Send out header record.
 	//
@@ -880,14 +897,22 @@ static void _motorola_flush_output( void ) {
 		fprintf( output_file, "%02X\r\n", ~s & 0xff );
 		buffered_address += buffered_output;
 		buffered_output = 0;
+		_motorola_srec_count++;
 	}
 }
 static void _motorola_set_address( word adrs ) {
-	word	cur;
-
-	if(( cur = buffered_address + buffered_output ) != adrs ) {
+	if(( buffered_address + buffered_output ) != adrs ) {
 		if( buffered_output ) _motorola_flush_output();
 		buffered_address = adrs;
+	}
+}
+static void _motorola_set_start( word adrs ) {
+	if( _motorola_have_start ) {
+		log_error( "Duplicate START address specified" );
+	}
+	else {
+		_motorola_have_start = true;
+		_motorola_start_address = adrs;	
 	}
 }
 static void _motorola_add_byte( byte data ) {
@@ -899,14 +924,20 @@ static void _motorola_end_output( void ) {
 	byte	s;
 	
 	_motorola_flush_output();
-	s = H( buffered_address ) + L( buffered_address ) + 3;
-	fprintf( output_file, "S903%04X%02X\r\n", buffered_address, ~s & 0xff );
+	//
+	//	The end records:
+	//
+	s = H( _motorola_srec_count ) + L( _motorola_srec_count ) + 3;
+	fprintf( output_file, "S503%04X%02X\r\n", _motorola_srec_count, ~s & 0xff );
+	s = H( _motorola_start_address ) + L( _motorola_start_address ) + 3;
+	fprintf( output_file, "S903%04X%02X\r\n", _motorola_start_address, ~s & 0xff );
 }
 
 static output_api _motorola_output_api = {
 	_motorola_init_output,
 	_motorola_next_line,
 	_motorola_set_address,
+	_motorola_set_start,
 	_motorola_add_byte,
 	_motorola_end_output
 };
@@ -936,12 +967,12 @@ static void _intel_flush_output( void ) {
 	}
 }
 static void _intel_set_address( word adrs ) {
-	word	cur;
-
-	if(( cur = buffered_address + buffered_output ) != adrs ) {
+	if(( buffered_address + buffered_output ) != adrs ) {
 		if( buffered_output ) _intel_flush_output();
 		buffered_address = adrs;
 	}
+}
+static void _intel_set_start( word adrs ) {
 }
 static void _intel_add_byte( byte data ) {
 	output_buffer[ buffered_output++ ] = data;
@@ -957,6 +988,7 @@ static output_api _intel_output_api = {
 	_intel_init_output,
 	_intel_next_line,
 	_intel_set_address,
+	_intel_set_start,
 	_intel_add_byte,
 	_intel_end_output
 };
@@ -1020,6 +1052,9 @@ static void next_line( int line, char *code ) {
 }
 static void set_address( word adrs ) {
 	FUNC( output_routine->set_address )( adrs );
+}
+static void set_start( word adrs ) {
+	FUNC( output_routine->set_start )( adrs );
 }
 static void add_byte( byte data ) {
 	FUNC( output_routine->add_byte )( data );
@@ -3079,6 +3114,36 @@ static bool asm_org( int line, char *label, char *opcode, char *arg, assemble_ph
 	return( false );
 }
 
+static bool asm_start( int line, char *label, char *opcode, char *arg, assemble_phase pass ) {
+	word	val;
+	bool	ret;
+
+	ret = true;
+	if( label ) {
+		if( !set_symbol( label, this_address, pass )) {
+			if( pass == GATHER_PHASE ) {
+				log_error( "Duplicate label for START" );
+			}
+			else {
+				log_error( "Inconsistent labelling for START" );
+			}
+			ret = false;
+		}
+	}
+	if( analyse_value( arg, pass, false, 1, &val ) == 1 ) {
+		//
+		//	Have value, set this address as the start address
+		//	of the executable.
+		//
+		set_start( val );
+	}
+	else {
+		log_error( "Error calculating START address" );
+		ret = false;
+	}
+	return( ret );
+}
+
 static bool _asm_db( int line, char *label, char *opcode, char *arg, assemble_phase pass, bool n_flag, bool s_flag ) {
 	word	constants[ MAX_CONSTANTS ];
 	int	l;
@@ -3353,6 +3418,14 @@ static asm_command directives[] = {
 	//	data item or machine instruction
 	//
 	{ "org",	asm_org		},
+	//
+	//	Setting the start address for the execution
+	//	of the assembled source code.  This will (if
+	//	output format permits) enter this address into
+	//	the output file as where execution should start
+	//	from.
+	//
+	{ "start",	asm_start	},
 	//
 	//	Define 8-bit data byte (or series of bytes)
 	//
