@@ -125,6 +125,40 @@ typedef uint16_t word;
 static int option_flags = OPTIONS_NONE;
 
 //
+//	COMPILE TIME DEBUGGING
+//	======================
+//
+//	Define ENABLE_DEBUG to include options
+//	for including additional checking code
+//	and optional debugging output messages.
+//
+
+#ifdef ENABLE_DEBUG
+//
+//	Define for debugging.
+//
+#define ASSERT(v)	do{ if(!(v)) { fprintf( stderr, "Assert Failed \"%s\" (%s:%d:%s).\n", #v, __FILE__, __LINE__, __FUNCTION__ ); abort(); }}while(0)
+#define PRINT(a)	do{ if( option_flags & DISPLAY_DEBUG ) printf a; }while(0)
+
+#else
+//
+//	Define for not debugging.
+//
+#define ASSERT(v)
+#define PRINT(a)
+
+#endif
+
+//
+//	The ABORT macro is always fully specified.  What is
+//	the point of crashing without giving some indication
+//	of why?
+//
+#define ABORT(m)	do{ fprintf( stderr, "Program Abort \"%s\" (%s:%d:%s).\n", (m), __FILE__, __LINE__, __FUNCTION__ ); abort(); }while(0)
+
+
+
+//
 //	Start by defining what constitutes an op code
 //	and its supporting (optional) argument.
 //
@@ -373,7 +407,13 @@ static op_ext ext_sub16[] = {{ "d", 0x0003 }, { NULL }};
 //
 //	X / Y / U / S : $8? - $F?
 //
-static op_ext ext_xyus2[] = {{ "x", 0x0000 }, { "u", 0x0040 }, { "y", 0x1000 }, { "s", 0x1040 }, { NULL }};
+//	I encoded the follow list, but do not seem to have
+//	used it anywhere.  This is either an indication that
+//	I have missed an instruction group, or that I resolved
+//	this in another way.  It's been too long for me to
+//	determine which :-/
+//
+//static op_ext ext_xysu2[] = {{ "x", 0x0000 }, { "u", 0x0040 }, { "y", 0x1000 }, { "s", 0x1040 }, { NULL }};
 
 //
 //	"cmp" extensions
@@ -575,6 +615,7 @@ static void _dump_opcodes( char *name, char *extn, word inst, op_arg *args ) {
 					_displ_opcode( name, extn, "r1..rn", inst + ar->adds );
 					break;
 				}
+				default: ABORT( "Unrecognised argument mode" );
 			}
 		}
 	}
@@ -760,7 +801,7 @@ static void _listing_flush_output( void ) {
 	}
 }
 static void _listing_next_line( int line, char *code ) {
-	assert( line > 0 );
+	ASSERT( line > 0 );
 	
 	//
 	//	Flush out anything we have pending..
@@ -1205,7 +1246,7 @@ static bool set_symbol( char *name, word value, assemble_phase pass ) {
 	//	the same value.
 	//
 
-	assert( sym->defined );
+	ASSERT( sym->defined );
 
 	return( sym->value == value );
 }
@@ -1216,7 +1257,6 @@ static bool set_symbol( char *name, word value, assemble_phase pass ) {
 //
 static word symbol_value( char *name, assemble_phase pass ) {
 	sym_entry	*sym;
-	bool		ret;
 
 	sym = find_symbol( name );
 	if( sym->defined ) return( sym->value );
@@ -1699,14 +1739,14 @@ typedef struct {
 static a_token *do_resync( a_token *list, resync *toks, bool log ) {
 	resync	*check;
 
-	assert( list != NULL );
+	ASSERT( list != NULL );
 	while( list->tok != EOS ) {
 		for( check = toks; check != NULL; check = check->prev ) {
 			if( check->stok == list->tok ) return( list );
 		}
 		list = list->b;
 		if( log ) log_error( "skipping token" );
-		assert( list != NULL );
+		ASSERT( list != NULL );
 	}
 	return( list );
 }
@@ -1733,8 +1773,8 @@ static void empty_arg_data( arg_data *data ) {
 static void scan_register_list( a_token *list, arg_data *data ) {
 	int	count;
 
-	assert( list != NULL );
-	assert( data != NULL );
+	ASSERT( list != NULL );
+	ASSERT( data != NULL );
 
 	count = 0;
 	while( list->tok != TOK_EOS ) {
@@ -1844,7 +1884,7 @@ static void scan_register_list( a_token *list, arg_data *data ) {
 		//
 		list = list->b;
 
-		assert( list != NULL );
+		ASSERT( list != NULL );
 
 		if( list->tok == TOK_EOS ) {
 			//
@@ -1862,7 +1902,7 @@ static void scan_register_list( a_token *list, arg_data *data ) {
 		//
 		list = list->b;
 
-		assert( list != NULL );
+		ASSERT( list != NULL );
 	}
 	//
 	//	Return from here is register list is truncated
@@ -1950,14 +1990,14 @@ static int character_value( char **s, int *l ) {
 	char	*ss, c, d;
 	int	ll;
 
-	assert( s != NULL );
-	assert( l != NULL );
+	ASSERT( s != NULL );
+	ASSERT( l != NULL );
 	
 	ss = *s;
 	ll = *l;
 
-	assert( ss != NULL );
-	assert( l >= 0 );
+	ASSERT( ss != NULL );
+	ASSERT( l >= 0 );
 
 	if( ll < 1 ) {
 		log_error( "Empty character constant" );
@@ -2364,6 +2404,7 @@ static a_token *organise_index_reg( a_token *list, resync *toks, a_token **tree,
 			break;
 		}
 	}
+	return( list );
 }
 
 //
@@ -2371,7 +2412,6 @@ static a_token *organise_index_reg( a_token *list, resync *toks, a_token **tree,
 //
 static a_token *organise_arg( a_token *list, resync *toks, a_token **tree, arg_data *data, assemble_phase pass ) {
 	resync		sync1, sync2;
-	a_token		*here;
 	bool		log;
 
 	//
@@ -2651,6 +2691,7 @@ static byte ea_index_register( arg_tokens reg ) {
 		case TOK_Y: return( 0x20 );
 		case TOK_U: return( 0x40 );
 		case TOK_S: return( 0x60 );
+		default: ABORT( "Token does not represent index register" );
 	}
 	log_error( "Invalid index reg (assembler programming error)" );
 	return( 0 );
@@ -2686,8 +2727,8 @@ static bool process_machine_inst( int line, char *opcode, char *arg, assemble_ph
 			word	i, j, len;
 			byte	inst[ MAX_INSTRUCTION ];
 
-			assert( o->exts != NULL );
-			assert( o->args != NULL );
+			ASSERT( o->exts != NULL );
+			ASSERT( o->args != NULL );
 
 			//
 			//	If there are extensions, then we need to find
@@ -2995,7 +3036,7 @@ static bool process_machine_inst( int line, char *opcode, char *arg, assemble_ph
 				}
 			}
 			
-			assert( len <= MAX_INSTRUCTION );
+			ASSERT( len <= MAX_INSTRUCTION );
 			
 			//
 			//	Output instruction (if appropiate)
@@ -3246,7 +3287,7 @@ static bool asm_ds( int line, char *label, char *opcode, char *arg, assemble_pha
 	}
 	if( analyse_value( arg, pass, false, 1, &val ) == 1 ) {
 		this_address = advance_pc( this_address, val );
-		return( true );
+		return( ret );
 	}
 	log_error( "Error calculating space required in DS" );
 	return( false );
@@ -3578,9 +3619,7 @@ static char *look_forward( char *from ) {
 	return( from + 1 );
 }
 			
-static bool break_line( char *line, char **label, char **opcode, char **arg, char **comment ) {
-	char	c;
-	
+static bool break_line( char *line, char **label, char **opcode, char **arg, char **comment ) {	
 	//
 	//	Label at start of line?
 	//
@@ -3822,7 +3861,6 @@ static int parse_arguments( int argc, char **argv ) {
 int main( int argc, char *argv[] ) {
 	FILE	*source;
 	int	file, last, count;
-	char	*dl;
 
 	//
 	//	Start with the arguments
