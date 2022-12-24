@@ -57,3 +57,7 @@ Addendum/
 This is starting to feel like it is almost useful.  Useful enough to require a manual page of some sort?  May be.
 
 I have not yet started the actual project that was the cause for starting this software (building an mc6809 SBC), but once that is under way then I am sure that the test of actual use will force out more wrinkles in the assembler.
+
+Extra Addendum/
+
+I really should add support for the Hitachi 6309 processor.  It cannot be that difficult, surely.
