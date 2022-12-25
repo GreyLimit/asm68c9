@@ -3155,36 +3155,6 @@ static bool asm_org( int line, char *label, char *opcode, char *arg, assemble_ph
 	return( false );
 }
 
-static bool asm_start( int line, char *label, char *opcode, char *arg, assemble_phase pass ) {
-	word	val;
-	bool	ret;
-
-	ret = true;
-	if( label ) {
-		if( !set_symbol( label, this_address, pass )) {
-			if( pass == GATHER_PHASE ) {
-				log_error( "Duplicate label for START" );
-			}
-			else {
-				log_error( "Inconsistent labelling for START" );
-			}
-			ret = false;
-		}
-	}
-	if( analyse_value( arg, pass, false, 1, &val ) == 1 ) {
-		//
-		//	Have value, set this address as the start address
-		//	of the executable.
-		//
-		set_start( val );
-	}
-	else {
-		log_error( "Error calculating START address" );
-		ret = false;
-	}
-	return( ret );
-}
-
 static bool _asm_db( int line, char *label, char *opcode, char *arg, assemble_phase pass, bool n_flag, bool s_flag ) {
 	word	constants[ MAX_CONSTANTS ];
 	int	l;
@@ -3411,21 +3381,33 @@ static bool asm_unsupported( int line, char *label, char *opcode, char *arg, ass
 static bool end_not_reached = true;
 
 static bool asm_end( int line, char *label, char *opcode, char *arg, assemble_phase pass ) {
+	word	val;
 	bool	ret;
 
+	end_not_reached = false;
 	ret = true;
 	if( label ) {
 		if( !set_symbol( label, this_address, pass )) {
 			if( pass == GATHER_PHASE ) {
-				log_error( "Duplicate label for DS" );
+				log_error( "Duplicate label for END" );
 			}
 			else {
-				log_error( "Inconsistent labelling for DS" );
+				log_error( "Inconsistent labelling for END" );
 			}
 			ret = false;
 		}
 	}
-	end_not_reached = false;
+	if( analyse_value( arg, pass, false, 1, &val ) == 1 ) {
+		//
+		//	Have value, set this address as the start address
+		//	of the executable.
+		//
+		set_start( val );
+	}
+	else {
+		log_error( "Error calculating START address" );
+		ret = false;
+	}
 	return( ret );
 }
 
@@ -3459,14 +3441,6 @@ static asm_command directives[] = {
 	//	data item or machine instruction
 	//
 	{ "org",	asm_org		},
-	//
-	//	Setting the start address for the execution
-	//	of the assembled source code.  This will (if
-	//	output format permits) enter this address into
-	//	the output file as where execution should start
-	//	from.
-	//
-	{ "start",	asm_start	},
 	//
 	//	Define 8-bit data byte (or series of bytes)
 	//
