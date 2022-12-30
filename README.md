@@ -40,7 +40,7 @@ Options:-
 	--hexadecimal	Output text hexadecimal values
 	--intel		Output Intel Hex format data
 	--motorola	Output Motorola S records
-	--listing	Display an assembly listing
+	--listing	Output an assembly listing
 	--no-output	Do not output any code
 	--stdout	Send output to console
 	--legacy-syntax	Accept legacy Motorola syntax
