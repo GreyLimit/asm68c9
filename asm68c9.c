@@ -22,9 +22,9 @@
 ///
 
 ///
-///	Yet another assembler for a defunct retro CPU.
-///
 ///	I give you another 6809 assembler: "asm68c9".
+///
+///	Yet another assembler for a defunct retro CPU.
 ///
 ///	Features:
 ///
@@ -102,27 +102,31 @@ typedef uint16_t word;
 //	and control the assembler.  These are OR'd together
 //	into the option_flags variable.
 //
-#define OPTIONS_NONE		00000
-//
-#define DISPLAY_TEXT		00001
-#define DISPLAY_INTEL		00002
-#define DISPLAY_MOTOROLA	00004
-#define DISPLAY_NOTHING		00010
-#define DISPLAY_LISTING		00020
-#define DISPLAY_MASK		(DISPLAY_TEXT|DISPLAY_INTEL|DISPLAY_MOTOROLA|DISPLAY_NOTHING|DISPLAY_LISTING)
-#define DISPLAY_STDOUT		00040
-//
-#define LEGACY_SYNTAX		00100
-#define DISPLAY_SYMBOLS		00200
-//
-#define DISPLAY_OPCODES		01000
-#define DISPLAY_HELP		02000
-#define DEBUG_ENABLE		04000
+typedef enum {
+	OPTIONS_NONE		= 000000,
+	//
+	DISPLAY_TEXT		= 000001,
+	DISPLAY_INTEL		= 000002,
+	DISPLAY_MOTOROLA	= 000004,
+	DISPLAY_NOTHING		= 000010,
+	DISPLAY_LISTING		= 000020,
+	DISPLAY_MASK		= (DISPLAY_TEXT|DISPLAY_INTEL|DISPLAY_MOTOROLA|DISPLAY_NOTHING|DISPLAY_LISTING),
+	DISPLAY_STDOUT		= 000040,
+	//
+	LEGACY_SYNTAX		= 000100,
+	DISPLAY_SYMBOLS		= 000200,
+	HITACHI_6309		= 000400,
+	//
+	DISPLAY_OPCODES		= 001000,
+	DISPLAY_HELP		= 002000,
+	DISPLAY_DEBUG		= 004000,
+	DISPLAY_VEBOSE		= 010000
+} program_options;
 
 //
 //	This is where the flags are combined.
 //
-static int option_flags = OPTIONS_NONE;
+static program_options option_flags = OPTIONS_NONE;
 
 //
 //	COMPILE TIME DEBUGGING
@@ -137,27 +141,32 @@ static int option_flags = OPTIONS_NONE;
 //
 //	Define for debugging.
 //
-#define ASSERT(v)	do{ if(!(v)) { fprintf( stderr, "Assert Failed \"%s\" (%s:%d:%s).\n", #v, __FILE__, __LINE__, __FUNCTION__ ); abort(); }}while(0)
-#define PRINT(a)	do{ if( option_flags & DISPLAY_DEBUG ) printf a; }while(0)
+#define ASSERT(v)		do{ if(!(v)) { fprintf( stderr, "Assert Failed \"%s\" (%s:%d:%s).\n", #v, __FILE__, __LINE__, __FUNCTION__ ); abort(); }}while(0)
+#define PRINT_DEBUG(a)		do{ if( option_flags & DISPLAY_DEBUG ) printf a; }while(0)
+#define PRINT_VERBOSE(a)	do{ if( option_flags & DISPLAY_VEBOSE ) printf a; }while(0)
 
 #else
 //
 //	Define for not debugging.
 //
 #define ASSERT(v)
-#define PRINT(a)
+#define PRINT_DEBUG(a)
+#define PRINT_VERBOSE(a)
 
 #endif
 
 //
 //	The ABORT macro is always fully specified.  What is
 //	the point of crashing without giving some indication
-//	of why?
+//	of why or where?
 //
 #define ABORT(m)	do{ fprintf( stderr, "Program Abort \"%s\" (%s:%d:%s).\n", (m), __FILE__, __LINE__, __FUNCTION__ ); abort(); }while(0)
 
 
 
+//
+//	Syntax and Semantics
+//	====================
 //
 //	Start by defining what constitutes an op code
 //	and its supporting (optional) argument.
@@ -233,7 +242,7 @@ static int option_flags = OPTIONS_NONE;
 //	Ind Pre dec (-2):	[,--ireg]
 //	Relative:		value,PC
 //	Ind Relative:		[value,PC]
-//
+// 	Indirect Extended	[value]
 //	Where:-
 //
 //		areg: A, B or D
@@ -244,6 +253,92 @@ static int option_flags = OPTIONS_NONE;
 //	(EA) which is where data is either gathered from (or placed
 //	into).
 //
+//	Legacy Syntax
+//	=============
+//
+//	There are a number of twists in the accepted syntax for
+//	6809 assembly language.  The following details capture
+//	those that I have recognised so far:
+//
+//	Numerical Representation
+//	------------------------
+//
+//	The presentation of numeric values not in base 10 have
+//	effectively three cases that have been employed which
+//	can be characterised by the following descriptions:
+//
+//	Symbol Prefix		A unique symbol is set aside for the
+//				introduction non-decimal base numbers.
+//				Within the assembly world the following
+//				symbols have been used by 6800/6809
+//				assemblers:
+//
+//				'$'	Hexadecimal	0-9,A-F
+//				'@'	Octal		0-7
+//				'%'	Binary		0,1
+//
+//	Suffixes		The base of a number is determined by the
+//				last character of its representation.  The
+//				following characters are those that I have
+//				determined (so far):
+//
+//				H|h	Hexadecimal	0-9,A-F
+//				B|b	Binary		0-7
+//
+//	C Language		While (as far as I am aware) the C language
+//				system of prefix characters does not have
+//				its basis in assembly languages, but has
+//				become a familiar and broadly applied syntax:
+//
+//				0x___	Hexadecimal	0-9,A-F
+//				0___	Octal		0-7
+//				___	Decimal		0-9
+//
+//	Data Sizing
+//	-----------
+//
+//	The 6809 CPU can address memory in a number of ways either through
+//	registers containing an address or though the program containing
+//	immediate values.  In the case of hard coded immediate values the
+//	CPU support two approaches characterised as 'Direct' and 'Extended'
+//	that align with an 8-bit value for Direct access and a 16-bit value
+//	for extended access.  Obviously an 8-bit value is insufficient for
+//	more than 256 bytes of RAM, but the CPU takes the content of the DP
+//	register (Direct Page) to provide the missing upper 8-bits of the
+//	address.
+//
+//	Setting the DP register and access RAM through Direct mode is
+//	faster than accessing the same memory using 16-bit Extended access and
+//	reduces the size of the program.
+//
+//	The assembler, with the assistance of the SETDP assembler directive,
+//	can reliably choose which access mode to use based on the value of
+//	the address provided.
+//
+//	Historically assemblers have provided two symbols that could be
+//	applied as 'hints' or explicit 'directive' to the assembler and guide
+//	how the assembler instruction was translated into machine code:
+//
+//	'<'	Direct mode
+//	'>'	Extended mode
+//
+//	So, placing one of these symbols ahead of an address or label
+//	would direct the assembler to generate an instruction using the
+//	indicated access mode.
+//
+//	However, There are historic examples of assembler where (especially
+//	the direct symbol) precedes access modes not obviously applicable.
+//
+//	The conclusion is that these symbols should be interpreted in an
+//	alternative fashion, thus:
+//
+//	'<'	Use as 8-bit byte value
+//	'>'	Use as 16-bit word value
+//
+//	This assembler will take the approach outlined above which is a
+//	more flexible system and remains compatible with legacy code
+//	(when used with or without enabling legacy mode).
+//	
 
 //
 //	Define symbolic values representing each of the effective
@@ -269,7 +364,7 @@ typedef enum {
 
 //
 //	Define symbolic values which summarise the various
-//	opcde types (ie what sort of argument data the opcode
+//	opcode types (ie what sort of argument data the opcode
 //	is expecting).
 //
 typedef enum {
@@ -281,7 +376,7 @@ typedef enum {
 	OP_IMM_WORD,			// #value (16-bit)
 	OP_DIRECT,			// value (8-bit with DP)
 	OP_EXTENDED,			// value (16-bit)
-	OP_INDEXED,			// Effective Address
+	OP_EADRS,			// Effective Address
 	OP_SRELATIVE,			// -128..+127 relative
 	OP_LRELATIVE,			// -32768..32767 relative
 	OP_REG_PAIR,			// Exchange or Transfer
@@ -307,7 +402,7 @@ typedef struct {
 //
 //	Direct / Indexed / Extended : $0?, $6? - $7?
 //
-static op_arg arg_dir_ind_ext1[] = {{ OP_DIRECT, 0x0000 }, { OP_INDEXED, 0x0060 }, { OP_EXTENDED, 0x0070 }, { OP_NONE }};
+static op_arg arg_dir_ind_ext1[] = {{ OP_DIRECT, 0x0000 }, { OP_EADRS, 0x0060 }, { OP_EXTENDED, 0x0070 }, { OP_NONE }};
 
 //
 //	Short Relative
@@ -322,18 +417,18 @@ static op_arg arg_lrel[] = {{ OP_LRELATIVE, 0x0000 }, { OP_NONE }};
 //
 //	Immediate / Direct / Indexed / Extended : $8? - $f?
 //
-static op_arg arg_imm_dir_ind_ext8[] = {{ OP_IMM_BYTE, 0x0000 }, { OP_DIRECT, 0x0010 }, { OP_INDEXED, 0x0020 }, { OP_EXTENDED, 0x0030 }, { OP_NONE }};
-static op_arg arg_imm_dir_ind_ext16[] = {{ OP_IMM_WORD, 0x0000 }, { OP_DIRECT, 0x0010 }, { OP_INDEXED, 0x0020 }, { OP_EXTENDED, 0x0030 }, { OP_NONE }};
+static op_arg arg_imm_dir_ind_ext8[] = {{ OP_IMM_BYTE, 0x0000 }, { OP_DIRECT, 0x0010 }, { OP_EADRS, 0x0020 }, { OP_EXTENDED, 0x0030 }, { OP_NONE }};
+static op_arg arg_imm_dir_ind_ext16[] = {{ OP_IMM_WORD, 0x0000 }, { OP_DIRECT, 0x0010 }, { OP_EADRS, 0x0020 }, { OP_EXTENDED, 0x0030 }, { OP_NONE }};
 
 //
 //	Direct / Indexed / Extended : $8? - $f?
 //
-static op_arg arg_dir_ind_ext2[] = {{ OP_DIRECT, 0x0010 }, { OP_INDEXED, 0x0020 }, { OP_EXTENDED, 0x0030 }, { OP_NONE }};
+static op_arg arg_dir_ind_ext2[] = {{ OP_DIRECT, 0x0010 }, { OP_EADRS, 0x0020 }, { OP_EXTENDED, 0x0030 }, { OP_NONE }};
 
 //
 //	Indexed
 //
-static op_arg arg_ind[] = {{ OP_INDEXED, 0x0000 }, { OP_NONE }};
+static op_arg arg_ind[] = {{ OP_EADRS, 0x0000 }, { OP_NONE }};
 
 //
 //	Immediate
@@ -460,18 +555,43 @@ static op_ext ext_lbra[] = {
 static op_ext ext_swi[] = {{ "1", 0x0000 }, { "2", 0x1000 }, { "3", 0x1100 }, { NULL }};
 
 //
-//	Define a data structure which captures an opcde and
+//	Define machine code instruction flags.
+//
+//	This are, primarily, associated with selection
+//	of the instruction set to be supported (the ISA,
+//	Instruction Set Architecture) or optional
+//	extensions specific to this assembler.
+//
+//	ISO is short for 'Instruction Set Option':
+//
+typedef enum {
+	ISO_NONE		= 00000,	// No target ISA selected
+	ISO_MC6809		= 00001,	// Original documented Motorola instructions
+	ISO_UNDOCUMENTED	= 00002,	// Undocumented Motorola instructions
+	ISO_HD6309		= 00004,	// Hitachi extended instuctions
+	ISO_ALIASES		= 00010		// Include meaningful instruction aliases
+						//	where this aids clarity.
+} inst_options;
+
+//
+//	Declare a global flag to hold the current
+//	set of instruction set options being applied.
+//
+static inst_options	iso_options = ISO_NONE;
+
+//
+//	Define a data structure which captures an opcode and
 //	its supported modes with rules to convert to target
 //	binary machine code.
 //
 typedef struct {
-	char	*name;			// The initial op code name
-	word	len;			// Length of the initial op code name
-	word	base;			// Base value for the instruction
-	op_ext	*exts;			// List of valid extentions
-	op_arg	*args;			// List of valid arguments
+	char		*name;			// The initial op code name
+	word		len;			// Length of the initial op code name
+	inst_options	iso;			// Options applicable to this instruction
+	word		base;			// Base value for the instruction
+	op_ext		*exts;			// List of valid extentions
+	op_arg		*args;			// List of valid arguments
 } op_code;
-
 
 
 ////////////////////////////////////////////////////////////////////////
@@ -480,72 +600,72 @@ typedef struct {
 //
 ////////////////////////////////////////////////////////////////////////
 
-static op_code mc6809_op[] = {
-	{ "abx",	3,	0x003a,	ext_none,	arg_inherent		},//
-	{ "adc",	3,	0x0089,	ext_ab2,	arg_imm_dir_ind_ext8	},//
-	{ "add",	3,	0x008b,	ext_add8,	arg_imm_dir_ind_ext8	},//
-	{ "add",	3,	0x008b,	ext_add16,	arg_imm_dir_ind_ext16	},//
-	{ "and",	3,	0x0084,	ext_ab2,	arg_imm_dir_ind_ext8	},//
-	{ "andcc",	5,	0x001c,	ext_none,	arg_imm8		},//
-	{ "asl",	3,	0x0008,	ext_none,	arg_dir_ind_ext1	},//
-	{ "asl",	3,	0x0048,	ext_ab1,	arg_inherent		},//
-	{ "asr",	3,	0x0007,	ext_none,	arg_dir_ind_ext1	},//
-	{ "asr",	3,	0x0047,	ext_ab1,	arg_inherent		},//
-	{ "b",		1,	0x0020, ext_sbra,	arg_srel		},//
-	{ "bit",	3,	0x0085,	ext_ab2,	arg_imm_dir_ind_ext8	},//
-	{ "bsr",	3,	0x008d,	ext_none,	arg_srel		},//
-	{ "clr",	3,	0x000f,	ext_none,	arg_dir_ind_ext1	},//
-	{ "clr",	3,	0x004f,	ext_ab1,	arg_inherent		},//
-	{ "cmp",	3,	0x0081,	ext_cmp8,	arg_imm_dir_ind_ext8	},//
-	{ "cmp",	3,	0x0081,	ext_cmp16,	arg_imm_dir_ind_ext16	},//
-	{ "com",	3,	0x0003,	ext_none,	arg_dir_ind_ext1	},//
-	{ "com",	3,	0x0043,	ext_ab1,	arg_inherent		},//
-	{ "cwai",	4,	0x003c,	ext_none,	arg_inherent		},//
-	{ "daa",	3,	0x0019,	ext_none,	arg_inherent		},//
-	{ "dec",	3,	0x000a,	ext_none,	arg_dir_ind_ext1	},//
-	{ "dec",	3,	0x004a,	ext_ab1,	arg_inherent		},//
-	{ "eor",	3,	0x0088,	ext_ab2,	arg_imm_dir_ind_ext8	},//
-	{ "exg",	3,	0x001e,	ext_none,	arg_pair		},//
-	{ "inc",	3,	0x000c,	ext_none,	arg_dir_ind_ext1	},//
-	{ "inc",	3,	0x004c,	ext_ab1,	arg_inherent		},//
-	{ "jmp",	3,	0x000e,	ext_none,	arg_dir_ind_ext1	},//
-	{ "jsr",	3,	0x008d,	ext_none,	arg_dir_ind_ext2	},//
-	{ "lb",		2,	0x1020, ext_lbra,	arg_lrel		},//
-	{ "lbra",	4,	0x0016,	ext_none,	arg_lrel		},//
-	{ "lbsr",	4,	0x0017,	ext_none,	arg_lrel		},//
-	{ "ld",		2,	0x0086,	ext_ld_st8,	arg_imm_dir_ind_ext8	},//
-	{ "ld",		2,	0x0086,	ext_ld_st16,	arg_imm_dir_ind_ext16	},//
-	{ "lea",	3,	0x0030, ext_xysu1,	arg_ind			},//
-	{ "lsl",	3,	0x0008,	ext_none,	arg_dir_ind_ext1	},//
-	{ "lsl",	3,	0x0048,	ext_ab1,	arg_inherent		},//
-	{ "lsr",	3,	0x0004,	ext_none,	arg_dir_ind_ext1	},//
-	{ "lsr",	3,	0x0044,	ext_ab1,	arg_inherent		},//
-	{ "mul",	3,	0x003d, ext_none,	arg_inherent		},//
-	{ "neg",	3,	0x0000,	ext_none,	arg_dir_ind_ext1	},//
-	{ "neg",	3,	0x0040,	ext_ab1,	arg_inherent		},//
-	{ "nop",	3,	0x0012,	ext_none,	arg_inherent		},//
-	{ "or",		2,	0x008a,	ext_ab2,	arg_imm_dir_ind_ext8	},//
-	{ "orcc",	4,	0x001a, ext_none,	arg_imm8		},//
-	{ "psh",	3,	0x0034, ext_su1,	arg_list		},//
-	{ "pul",	3,	0x0035, ext_su1,	arg_list		},//
-	{ "rol",	3,	0x0009,	ext_none,	arg_dir_ind_ext1	},//
-	{ "rol",	3,	0x0049,	ext_ab1,	arg_inherent		},//
-	{ "ror",	3,	0x0006,	ext_none,	arg_dir_ind_ext1	},//
-	{ "ror",	3,	0x0046,	ext_ab1,	arg_inherent		},//
-	{ "rti",	3,	0x003b,	ext_none,	arg_inherent		},//
-	{ "rts",	3,	0x0039,	ext_none,	arg_inherent		},//
-	{ "sbc",	3,	0x0082,	ext_ab2,	arg_imm_dir_ind_ext8	},//
-	{ "sex",	3,	0x001d,	ext_none,	arg_inherent		},//
-	{ "st",		2,	0x0087,	ext_ld_st8,	arg_dir_ind_ext2	},//
-	{ "st",		2,	0x0087,	ext_ld_st16,	arg_dir_ind_ext2	},//
-	{ "sub",	3,	0x0080,	ext_sub8,	arg_imm_dir_ind_ext8	},//
-	{ "sub",	3,	0x0080,	ext_sub16,	arg_imm_dir_ind_ext16	},//
-	{ "swi",	3,	0x003f, ext_none,	arg_inherent		},//
-	{ "swi",	3,	0x003f,	ext_swi,	arg_inherent		},//
-	{ "sync",	4,	0x0013, ext_none,	arg_inherent		},//
-	{ "tfr",	3,	0x001f,	ext_none,	arg_pair		},//
-	{ "tst",	3,	0x000d,	ext_none,	arg_dir_ind_ext1	},//
-	{ "tst",	3,	0x004d,	ext_ab1,	arg_inherent		},//
+static op_code instruction_table[] = {
+	{ "abx",	3,	ISO_MC6809,		0x003a,	ext_none,	arg_inherent		},//
+	{ "adc",	3,	ISO_MC6809,		0x0089,	ext_ab2,	arg_imm_dir_ind_ext8	},//
+	{ "add",	3,	ISO_MC6809,		0x008b,	ext_add8,	arg_imm_dir_ind_ext8	},//
+	{ "add",	3,	ISO_MC6809,		0x008b,	ext_add16,	arg_imm_dir_ind_ext16	},//
+	{ "and",	3,	ISO_MC6809,		0x0084,	ext_ab2,	arg_imm_dir_ind_ext8	},//
+	{ "andcc",	5,	ISO_MC6809,		0x001c,	ext_none,	arg_imm8		},//
+	{ "asl",	3,	ISO_MC6809,		0x0008,	ext_none,	arg_dir_ind_ext1	},//
+	{ "asl",	3,	ISO_MC6809,		0x0048,	ext_ab1,	arg_inherent		},//
+	{ "asr",	3,	ISO_MC6809,		0x0007,	ext_none,	arg_dir_ind_ext1	},//
+	{ "asr",	3,	ISO_MC6809,		0x0047,	ext_ab1,	arg_inherent		},//
+	{ "b",		1,	ISO_MC6809,		0x0020, ext_sbra,	arg_srel		},//
+	{ "bit",	3,	ISO_MC6809,		0x0085,	ext_ab2,	arg_imm_dir_ind_ext8	},//
+	{ "bsr",	3,	ISO_MC6809,		0x008d,	ext_none,	arg_srel		},//
+	{ "clr",	3,	ISO_MC6809,		0x000f,	ext_none,	arg_dir_ind_ext1	},//
+	{ "clr",	3,	ISO_MC6809,		0x004f,	ext_ab1,	arg_inherent		},//
+	{ "cmp",	3,	ISO_MC6809,		0x0081,	ext_cmp8,	arg_imm_dir_ind_ext8	},//
+	{ "cmp",	3,	ISO_MC6809,		0x0081,	ext_cmp16,	arg_imm_dir_ind_ext16	},//
+	{ "com",	3,	ISO_MC6809,		0x0003,	ext_none,	arg_dir_ind_ext1	},//
+	{ "com",	3,	ISO_MC6809,		0x0043,	ext_ab1,	arg_inherent		},//
+	{ "cwai",	4,	ISO_MC6809,		0x003c,	ext_none,	arg_imm8		},//
+	{ "daa",	3,	ISO_MC6809,		0x0019,	ext_none,	arg_inherent		},//
+	{ "dec",	3,	ISO_MC6809,		0x000a,	ext_none,	arg_dir_ind_ext1	},//
+	{ "dec",	3,	ISO_MC6809,		0x004a,	ext_ab1,	arg_inherent		},//
+	{ "eor",	3,	ISO_MC6809,		0x0088,	ext_ab2,	arg_imm_dir_ind_ext8	},//
+	{ "exg",	3,	ISO_MC6809,		0x001e,	ext_none,	arg_pair		},//
+	{ "inc",	3,	ISO_MC6809,		0x000c,	ext_none,	arg_dir_ind_ext1	},//
+	{ "inc",	3,	ISO_MC6809,		0x004c,	ext_ab1,	arg_inherent		},//
+	{ "jmp",	3,	ISO_MC6809,		0x000e,	ext_none,	arg_dir_ind_ext1	},//
+	{ "jsr",	3,	ISO_MC6809,		0x008d,	ext_none,	arg_dir_ind_ext2	},//
+	{ "lb",		2,	ISO_MC6809,		0x1020, ext_lbra,	arg_lrel		},//
+	{ "lbra",	4,	ISO_MC6809,		0x0016,	ext_none,	arg_lrel		},//
+	{ "lbsr",	4,	ISO_MC6809,		0x0017,	ext_none,	arg_lrel		},//
+	{ "ld",		2,	ISO_MC6809,		0x0086,	ext_ld_st8,	arg_imm_dir_ind_ext8	},//
+	{ "ld",		2,	ISO_MC6809,		0x0086,	ext_ld_st16,	arg_imm_dir_ind_ext16	},//
+	{ "lea",	3,	ISO_MC6809,		0x0030, ext_xysu1,	arg_ind			},//
+	{ "lsl",	3,	ISO_MC6809,		0x0008,	ext_none,	arg_dir_ind_ext1	},//
+	{ "lsl",	3,	ISO_MC6809,		0x0048,	ext_ab1,	arg_inherent		},//
+	{ "lsr",	3,	ISO_MC6809,		0x0004,	ext_none,	arg_dir_ind_ext1	},//
+	{ "lsr",	3,	ISO_MC6809,		0x0044,	ext_ab1,	arg_inherent		},//
+	{ "mul",	3,	ISO_MC6809,		0x003d, ext_none,	arg_inherent		},//
+	{ "neg",	3,	ISO_MC6809,		0x0000,	ext_none,	arg_dir_ind_ext1	},//
+	{ "neg",	3,	ISO_MC6809,		0x0040,	ext_ab1,	arg_inherent		},//
+	{ "nop",	3,	ISO_MC6809,		0x0012,	ext_none,	arg_inherent		},//
+	{ "or",		2,	ISO_MC6809,		0x008a,	ext_ab2,	arg_imm_dir_ind_ext8	},//
+	{ "orcc",	4,	ISO_MC6809,		0x001a, ext_none,	arg_imm8		},//
+	{ "psh",	3,	ISO_MC6809,		0x0034, ext_su1,	arg_list		},//
+	{ "pul",	3,	ISO_MC6809,		0x0035, ext_su1,	arg_list		},//
+	{ "rol",	3,	ISO_MC6809,		0x0009,	ext_none,	arg_dir_ind_ext1	},//
+	{ "rol",	3,	ISO_MC6809,		0x0049,	ext_ab1,	arg_inherent		},//
+	{ "ror",	3,	ISO_MC6809,		0x0006,	ext_none,	arg_dir_ind_ext1	},//
+	{ "ror",	3,	ISO_MC6809,		0x0046,	ext_ab1,	arg_inherent		},//
+	{ "rti",	3,	ISO_MC6809,		0x003b,	ext_none,	arg_inherent		},//
+	{ "rts",	3,	ISO_MC6809,		0x0039,	ext_none,	arg_inherent		},//
+	{ "sbc",	3,	ISO_MC6809,		0x0082,	ext_ab2,	arg_imm_dir_ind_ext8	},//
+	{ "sex",	3,	ISO_MC6809,		0x001d,	ext_none,	arg_inherent		},//
+	{ "st",		2,	ISO_MC6809,		0x0087,	ext_ld_st8,	arg_dir_ind_ext2	},//
+	{ "st",		2,	ISO_MC6809,		0x0087,	ext_ld_st16,	arg_dir_ind_ext2	},//
+	{ "sub",	3,	ISO_MC6809,		0x0080,	ext_sub8,	arg_imm_dir_ind_ext8	},//
+	{ "sub",	3,	ISO_MC6809,		0x0080,	ext_sub16,	arg_imm_dir_ind_ext16	},//
+	{ "swi",	3,	ISO_MC6809,		0x003f, ext_none,	arg_inherent		},//
+	{ "swi",	3,	ISO_MC6809,		0x003f,	ext_swi,	arg_inherent		},//
+	{ "sync",	4,	ISO_MC6809,		0x0013, ext_none,	arg_inherent		},//
+	{ "tfr",	3,	ISO_MC6809,		0x001f,	ext_none,	arg_pair		},//
+	{ "tst",	3,	ISO_MC6809,		0x000d,	ext_none,	arg_dir_ind_ext1	},//
+	{ "tst",	3,	ISO_MC6809,		0x004d,	ext_ab1,	arg_inherent		},//
 	{ NULL }
 };
 
@@ -556,13 +676,19 @@ static op_code mc6809_op[] = {
 //
 ////////////////////////////////////////////////////////////////////////
 
-static void _displ_opcode( char *name, char *extn, char *param, word inst ) {
+static void _displ_opcode( inst_options iso, char *name, char *extn, char *param, word inst ) {
 	int	hi, lo;
+	char	M, U, H, A;
+
+	M = ( iso & ISO_MC6809 )? 'M': '-';
+	U = ( iso & ISO_UNDOCUMENTED )? 'U': '-';
+	H = ( iso & ISO_HD6309 )? 'H': '-';
+	A = ( iso & ISO_ALIASES )? 'A': '-';
 
 	lo = inst & 0xff;
 	hi = ( inst >> 8 )&0xff;
 
-	printf( "%s%s\t%s\t", name, extn, param );
+	printf( "%c%c%c%c\t%s%s\t%s\t", M,U,H,A, name, extn, param );
 	if( hi ) {
 		printf( "%02X %02X\n", hi, lo );
 	}
@@ -571,48 +697,48 @@ static void _displ_opcode( char *name, char *extn, char *param, word inst ) {
 	}
 }
 
-static void _dump_opcodes( char *name, char *extn, word inst, op_arg *args ) {
+static void _dump_opcodes( inst_options iso, char *name, char *extn, word inst, op_arg *args ) {
 	if( args ) {
 		for( op_arg *ar = args; ar->mode != OP_NONE; ar++ ) {
 			switch( ar->mode ) {
 				case OP_INHERENT: {
-					_displ_opcode( name, extn, "", inst + ar->adds );
+					_displ_opcode( iso, name, extn, "", inst + ar->adds );
 					break;
 				}
 				case OP_IMM_BYTE: {
-					_displ_opcode( name, extn, "#byte", inst + ar->adds );
+					_displ_opcode( iso, name, extn, "#byte", inst + ar->adds );
 					break;
 				}
 				case OP_IMM_WORD: {
-					_displ_opcode( name, extn, "#word", inst + ar->adds );
+					_displ_opcode( iso, name, extn, "#word", inst + ar->adds );
 					break;
 				}
 				case OP_DIRECT: {
-					_displ_opcode( name, extn, ">value", inst + ar->adds );
+					_displ_opcode( iso, name, extn, "<value", inst + ar->adds );
 					break;
 				}
 				case OP_EXTENDED: {
-					_displ_opcode( name, extn, "<value", inst + ar->adds );
+					_displ_opcode( iso, name, extn, ">value", inst + ar->adds );
 					break;
 				}
-				case OP_INDEXED: {
-					_displ_opcode( name, extn, "indexed", inst + ar->adds );
+				case OP_EADRS: {
+					_displ_opcode( iso, name, extn, "indexed", inst + ar->adds );
 					break;
 				}
 				case OP_SRELATIVE: {
-					_displ_opcode( name, extn, "srel", inst + ar->adds );
+					_displ_opcode( iso, name, extn, "srel", inst + ar->adds );
 					break;
 				}
 				case OP_LRELATIVE: {
-					_displ_opcode( name, extn, "lrel", inst + ar->adds );
+					_displ_opcode( iso, name, extn, "lrel", inst + ar->adds );
 					break;
 				}
 				case OP_REG_PAIR: {
-					_displ_opcode( name, extn, "r1,r2", inst + ar->adds );
+					_displ_opcode( iso, name, extn, "r1,r2", inst + ar->adds );
 					break;
 				}
 				case OP_REG_LIST: {
-					_displ_opcode( name, extn, "r1..rn", inst + ar->adds );
+					_displ_opcode( iso, name, extn, "r1..rn", inst + ar->adds );
 					break;
 				}
 				default: ABORT( "Unrecognised argument mode" );
@@ -620,19 +746,19 @@ static void _dump_opcodes( char *name, char *extn, word inst, op_arg *args ) {
 		}
 	}
 	else {
-		_displ_opcode( name, extn, "", inst );
+		_displ_opcode( iso, name, extn, "", inst );
 	}
 }
 
 static void dump_opcodes( void ) {
-	for( op_code *op = mc6809_op; op->name; op++ ) {
+	for( op_code *op = instruction_table; op->name; op++ ) {
 		if( op->exts ) {
 			for( op_ext *ex = op->exts; ex->extn; ex++ ) {
-				_dump_opcodes( op->name, ex->extn, op->base + ex->adds, op->args );
+				_dump_opcodes( op->iso, op->name, ex->extn, op->base + ex->adds, op->args );
 			}
 		}
 		else {
-			_dump_opcodes( op->name, "", op->base, op->args );
+			_dump_opcodes( op->iso, op->name, "", op->base, op->args );
 		}
 	}
 }
@@ -1123,11 +1249,20 @@ static void end_output( void ) {
 //
 
 typedef enum {
+	INITIALISATION_PHASE,	// Assembler before parsing a file.
 	GATHER_PHASE,		// Gather all symbols and any fixed values.
 	NORMALISE_PHASE,	// Recalculate "derived" symbol values until
 				// all symbol values stabalise.
-	GENERATOR_PHASE		// generate the output code.
+	GENERATOR_PHASE,	// Generate the output code.
+	RELOCATION_PHASE	// Generate relocation tables (uncoded).
 } assemble_phase;
+
+//
+//	To reduce the overhead of passing round what is essentially
+//	a constant value, the assembler pass/phase will be globally
+//	stored here:
+//
+assemble_phase assembler_pass = INITIALISATION_PHASE;
 
 ////////////////////////////////////////////////////////////////////////
 //
@@ -1210,12 +1345,12 @@ static sym_entry *find_symbol( char *name ) {
 //	if the symbol had no value before OR if the
 //	new value matches the previous value.
 //
-static bool set_symbol( char *name, word value, assemble_phase pass ) {
+static bool set_symbol( char *name, word value ) {
 	sym_entry	*sym;
 
 	sym = find_symbol( name );
-	if( option_flags & DEBUG_ENABLE ) printf( "Set %s=%04X\n", name, value );
-	switch( pass ) {
+	PRINT_DEBUG(( "Set %s=%04X\n", name, value ));
+	switch( assembler_pass ) {
 		case GATHER_PHASE: {
 			//
 			//	In the gather phase we can set a symbol,
@@ -1237,13 +1372,16 @@ static bool set_symbol( char *name, word value, assemble_phase pass ) {
 			return( true );
 		}
 		default: {
+			//
+			//	Fall through for other options.
+			//
 			break;
 		}
 	}
 	//
 	//	Code generator phase: we can set a symbol again,
-	//	but only if it has been set already and to
-	//	the same value.
+	//	but only if it has already been set and to the
+	//	same value.
 	//
 
 	ASSERT( sym->defined );
@@ -1255,12 +1393,12 @@ static bool set_symbol( char *name, word value, assemble_phase pass ) {
 //	Return the value of a symbol (and produce an error if
 //	it is undefined while not gathering).
 //
-static word symbol_value( char *name, assemble_phase pass ) {
+static word symbol_value( char *name ) {
 	sym_entry	*sym;
 
 	sym = find_symbol( name );
 	if( sym->defined ) return( sym->value );
-	if( pass != GATHER_PHASE ) log_error( "Undefined symbol value" );
+	if( assembler_pass != GATHER_PHASE ) log_error( "Undefined symbol value" );
 	return( 0 );
 }
 
@@ -1340,9 +1478,10 @@ static byte	direct_page = 0x00;
 //
 //	The reset condition routine.
 //
-static void reset_conditions( void ) {
+static void reset_conditions( assemble_phase pass ) {
 	this_address = 0x0000;
 	direct_page = 0x00;
+	assembler_pass = pass;
 }
 
 ////////////////////////////////////////////////////////////////////////
@@ -1362,7 +1501,7 @@ typedef enum {
 	TOK_LEGACY_STRING,				//	Legacy string and
 	TOK_LEGACY_CHARACTER,				//	character constants
 	//
-	TOK_DIRECT, TOK_EXTENDED,			// > <
+	TOK_EXTENDED, TOK_DIRECT,			// > <
 	TOK_IMMEDIATE,					// #
 	TOK_A, TOK_B, TOK_D,				// A B D
 	TOK_X, TOK_Y,					// X Y
@@ -1415,8 +1554,8 @@ static token_defn fixed_tokens[] = {
 	{ "|",	1,	TOK_OR		},
 	{ "^",	1,	TOK_XOR		},
 	{ "~",	1,	TOK_NOT		},
-	{ ">",	1,	TOK_DIRECT	},
-	{ "<",	1,	TOK_EXTENDED	},
+	{ "<",	1,	TOK_DIRECT	},
+	{ ">",	1,	TOK_EXTENDED	},
 	{ "#",	1,	TOK_IMMEDIATE	},
 	{ NULL }
 };
@@ -1452,7 +1591,8 @@ typedef struct _a_token {
 	arg_tokens	tok;
 	char		*start;
 	int		len;
-	struct _a_token	*a, *b;
+	struct _a_token	*a, *b,		//  Token tree pointers (a op b)
+			*c;		//  Token list pointer (c for chain).
 } a_token;
 
 //
@@ -1467,7 +1607,7 @@ static bool is_ident_1( char c ) {
 	return(( isalpha( c )||( c == USCORE ))||(( option_flags & LEGACY_SYNTAX )&&( c == PERIOD )));
 }
 static bool is_ident_2( char c ) {
-	return(( isalnum( c )||( c == USCORE ))||(( option_flags & LEGACY_SYNTAX )&&( c == PERIOD )));
+	return(( isalnum( c )||( c == USCORE )));
 }
 
 //
@@ -1744,7 +1884,7 @@ static a_token *do_resync( a_token *list, resync *toks, bool log ) {
 		for( check = toks; check != NULL; check = check->prev ) {
 			if( check->stok == list->tok ) return( list );
 		}
-		list = list->b;
+		list = list->c;
 		if( log ) log_error( "skipping token" );
 		ASSERT( list != NULL );
 	}
@@ -1882,7 +2022,7 @@ static void scan_register_list( a_token *list, arg_data *data ) {
 		//
 		//	look for end of list or a comma...
 		//
-		list = list->b;
+		list = list->c;
 
 		ASSERT( list != NULL );
 
@@ -1900,7 +2040,7 @@ static void scan_register_list( a_token *list, arg_data *data ) {
 		//
 		//	Skip comma and look for another register
 		//
-		list = list->b;
+		list = list->c;
 
 		ASSERT( list != NULL );
 	}
@@ -1916,12 +2056,11 @@ static int digit_value( char v ) {
 	if(( v >= '0' )&&( v <= '9' )) return( v - '0' );
 	if(( v >= 'A' )&&( v <= 'F' )) return(( v - 'A' )+10 );
 	if(( v >= 'a' )&&( v <= 'f' )) return(( v - 'a' )+10 );
-	log_error( "Invalid numerical digit" );
-	return( 0 );
+	return( ERROR );
 }
 
 //
-//	cheaky little octal routine
+//	Cheaky little octal routine
 //
 static bool isoctal( char c ) {
 	return(( c >= '0' )&&( c <= '7' ));
@@ -1970,6 +2109,9 @@ static int numeric_value( char *text, int len ) {
 			break;
 		}
 		default: {
+			//
+			//	Anything else we just fall through.
+			//
 			break;
 		}
 	}
@@ -1977,7 +2119,14 @@ static int numeric_value( char *text, int len ) {
 	//	Scan number
 	//
 	while( len-- ) {
-		if(( digit = digit_value( *text++ )) >= base ) log_error( "Invalid number constant" );
+		if(( digit = digit_value( *text++ )) == ERROR ) {
+			log_error( "Invalid numerical digit" );
+			break;
+		}
+		if( digit >= base ) {
+			log_error( "Numerical digit not in base range" );
+			break;
+		}
 		value = value * base + digit;
 	}
 	return( value );
@@ -2059,6 +2208,9 @@ static int character_value( char **s, int *l ) {
 						break;
 					}
 					default: {
+						//
+						//	If it is not recognised we are just
+						//	escaping the actual character itself.
 						break;
 					}
 				}
@@ -2076,7 +2228,7 @@ static int character_value( char **s, int *l ) {
 //
 //	Perform a calculation of a value tree.
 //
-static int evaluate_tree( a_token *here, assemble_phase pass ) {
+static int evaluate_tree( a_token *here ) {
 	if( here == NULL ) return( 0 );
 	switch( here->tok ) {
 		case TOK_SYMBOL: {
@@ -2084,7 +2236,7 @@ static int evaluate_tree( a_token *here, assemble_phase pass ) {
 
 			str = memcpy( alloca( here->len+1 ), here->start , here->len );
 			str[ here->len ] = EOS;
-			return( symbol_value( str, pass ));
+			return( symbol_value( str ));
 		}
 		case TOK_VALUE: {
 			return( numeric_value( here->start , here->len ));
@@ -2119,50 +2271,53 @@ static int evaluate_tree( a_token *here, assemble_phase pass ) {
 			return( c );
 		}
 		case TOK_PLUS: {
-			return( evaluate_tree( here->a, pass ) + evaluate_tree( here->b, pass ));
+			return( evaluate_tree( here->a ) + evaluate_tree( here->b ));
 		}
 		case TOK_MINUS: {
-			return( evaluate_tree( here->a, pass ) - evaluate_tree( here->b, pass ));
+			return( evaluate_tree( here->a ) - evaluate_tree( here->b ));
 		}
 		case TOK_POSITIVE: {
-			return( evaluate_tree( here->a, pass ));
+			return( evaluate_tree( here->a ));
 		}
 		case TOK_NEGATIVE: {
-			return( -evaluate_tree( here->a, pass ));
+			return( -evaluate_tree( here->a ));
 		}
 		case TOK_MUL: {
-			return( evaluate_tree( here->a, pass ) * evaluate_tree( here->b, pass ));
+			return( evaluate_tree( here->a ) * evaluate_tree( here->b ));
 		}
 		case TOK_DIV: {
 			int	d;
 
-			d = evaluate_tree( here->b, pass );
-			if( d != 0 ) return( evaluate_tree( here->a, pass ) / d );
+			d = evaluate_tree( here->b );
+			if( d != 0 ) return( evaluate_tree( here->a ) / d );
 			log_error( "Division by 0 detected" );
 			return( 0 );
 		}
 		case TOK_LSHIFT: {
-			return( evaluate_tree( here->a, pass ) << evaluate_tree( here->b, pass ));
+			return( evaluate_tree( here->a ) << evaluate_tree( here->b ));
 		}
 		case TOK_RSHIFT: {
-			return( evaluate_tree( here->a, pass ) >> evaluate_tree( here->b, pass ));
+			return( evaluate_tree( here->a ) >> evaluate_tree( here->b ));
 		}
 		case TOK_AND: {
-			return( evaluate_tree( here->a, pass ) & evaluate_tree( here->b, pass ));
+			return( evaluate_tree( here->a ) & evaluate_tree( here->b ));
 		}
 		case TOK_OR: {
-			return( evaluate_tree( here->a, pass ) | evaluate_tree( here->b, pass ));
+			return( evaluate_tree( here->a ) | evaluate_tree( here->b ));
 		}
 		case TOK_XOR: {
-			return( evaluate_tree( here->a, pass ) ^ evaluate_tree( here->b, pass ));
+			return( evaluate_tree( here->a ) ^ evaluate_tree( here->b ));
 		}
 		case TOK_NOT: {
-			return( ~evaluate_tree( here->a, pass ));
+			return( ~evaluate_tree( here->a ));
 		}
 		case TOK_ADDRESS: {
 			return( this_address );
 		}
 		default: {
+			//
+			//	Fall through for all other cases.
+			//
 			break;
 		}
 	}
@@ -2192,9 +2347,9 @@ static a_token *organise_atomic( a_token *list, resync *toks, a_token **tree, bo
 		case TOK_OPAREN: {
 			sync.stok = TOK_CPAREN;
 			sync.prev = toks;
-			list = organise_value( list->b, &sync, tree, log );
+			list = organise_value( list->c, &sync, tree, log );
 			if( list->tok == TOK_CPAREN ) {
-				list = list->b;
+				list = list->c;
 			}
 			else {
 				if( log ) log_error( "')' missing from sub-expression" );
@@ -2205,18 +2360,18 @@ static a_token *organise_atomic( a_token *list, resync *toks, a_token **tree, bo
 		case TOK_PLUS: {
 			list->tok = TOK_POSITIVE;
 			*tree = list;
-			list = organise_atomic( list->b, &sync, &( list->a ), log );
+			list = organise_atomic( list->c, &sync, &( list->a ), log );
 			break;
 		}
 		case TOK_MINUS: {
 			list->tok = TOK_NEGATIVE;
 			*tree = list;
-			list = organise_atomic( list->b, &sync, &( list->a ), log );
+			list = organise_atomic( list->c, &sync, &( list->a ), log );
 			break;
 		}
 		case TOK_NOT: {
 			*tree = list;
-			list = organise_atomic( list->b, &sync, &( list->a ), log );
+			list = organise_atomic( list->c, &sync, &( list->a ), log );
 			break;
 		}
 		case TOK_MUL: {
@@ -2225,7 +2380,7 @@ static a_token *organise_atomic( a_token *list, resync *toks, a_token **tree, bo
 			//
 			list->tok = TOK_ADDRESS;
 			*tree = list;
-			list = list->b;
+			list = list->c;
 			break;
 		}
 		case TOK_VALUE:
@@ -2235,8 +2390,13 @@ static a_token *organise_atomic( a_token *list, resync *toks, a_token **tree, bo
 		case TOK_LEGACY_CHARACTER:
 		case TOK_SYMBOL: {
 			*tree = list;
-			list = list->b;
+			list = list->c;
 			break;
+		}
+		case TOK_EOS: {
+			if( log ) log_error( "Unexpected end of line" );
+			*tree = NULL;
+			return( list );
 		}
 		default: {
 			if( log ) log_error( "Unexpected symbol" );
@@ -2265,7 +2425,7 @@ static a_token *organise_middle( a_token *list, resync *toks, a_token **tree, bo
 	while(( list->tok == TOK_AND )||( list->tok == TOK_MUL )||( list->tok == TOK_DIV )||( list->tok == TOK_LSHIFT )||( list->tok == TOK_RSHIFT )) {
 		list->a = *tree;
 		*tree = list;
-		list = organise_atomic( list->b, &sync1, &( list->b ), log );
+		list = organise_atomic( list->c, &sync1, &( list->b ), log );
 	}
 	return( list );
 }
@@ -2285,12 +2445,12 @@ static a_token *organise_value( a_token *list, resync *toks, a_token **tree, boo
 	while(( list->tok == TOK_MINUS )||( list->tok == TOK_PLUS )||( list->tok == TOK_OR )||( list->tok == TOK_XOR )) {
 		list->a = *tree;
 		*tree = list;
-		list = organise_middle( list->b, &sync1, &( list->b ), log );
+		list = organise_middle( list->c, &sync1, &( list->b ), log );
 	}
 	return( list );
 }
 
-static a_token *organise_reg_or_value( a_token *list, resync *toks, a_token **tree, arg_data *data, assemble_phase pass ) {
+static a_token *organise_reg_or_value( a_token *list, resync *toks, a_token **tree, bool ind, arg_data *data ) {
 
 	switch( list->tok ) {
 		case TOK_A:
@@ -2298,15 +2458,21 @@ static a_token *organise_reg_or_value( a_token *list, resync *toks, a_token **tr
 		case TOK_D: {
 			data->a_reg = list->tok;
 			*tree = list;
-			list = list->b;
-			data->ea = EA_ACC_INDEX;
-			data->op = OP_INDEXED;
+			list = list->c;
+			data->ea = ind? EA_IND_ACC_INDEX: EA_ACC_INDEX;
+			data->op = OP_EADRS;
 			break;
 		}
 		default: {
 			list = organise_value( list, toks, tree, ( data->reg_count == 0 ));
-			data->value = evaluate_tree( *tree, pass );
-			data->op = OP_EXTENDED;
+			data->value = evaluate_tree( *tree );
+			if( ind ) {
+				data->ea = EA_IND_EXTENDED;
+				data->op = OP_EADRS;
+			}
+			else {
+				data->op = OP_EXTENDED;
+			}
 			break;
 		}
 	}
@@ -2322,7 +2488,7 @@ static a_token *organise_index_reg( a_token *list, resync *toks, a_token **tree,
 		case TOK_MINUS:
 		case TOK_MINUSMINUS: {
 			if(( data->ea != EA_NONE )&& log ) log_error( "Invalid register offset effective address" );
-			switch( list->b->tok ) {
+			switch( list->c->tok ) {
 				case TOK_X:
 				case TOK_Y:
 				case TOK_U:
@@ -2338,9 +2504,9 @@ static a_token *organise_index_reg( a_token *list, resync *toks, a_token **tree,
 					else {
 						data->ea = (list->tok == TOK_MINUS )? EA_PRE_DEC_ONE: EA_PRE_DEC_TWO;
 					}
-					data->i_reg = list->b->tok;
+					data->i_reg = list->c->tok;
 					*tree = list;
-					list = list->b->b;
+					list = list->c->c;
 					break;
 				}
 				default: {
@@ -2355,12 +2521,12 @@ static a_token *organise_index_reg( a_token *list, resync *toks, a_token **tree,
 		case TOK_Y:
 		case TOK_U:
 		case TOK_S: {
-			switch( list->b->tok ) {
+			switch( list->c->tok ) {
 				case TOK_PLUS:
 				case TOK_PLUSPLUS: {
 					if(( data->ea != EA_NONE )&& log ) log_error( "Invalid register offset effective address" );
 					if( ind ) {
-						if( list->b->tok == TOK_PLUS ) {
+						if( list->c->tok == TOK_PLUS ) {
 							if( log ) log_error( "Invalid indirected single post-increment" );
 						}
 						else {
@@ -2368,11 +2534,11 @@ static a_token *organise_index_reg( a_token *list, resync *toks, a_token **tree,
 						}
 					}
 					else {
-						data->ea = ( list->b->tok == TOK_PLUS )? EA_POST_INC_ONE: EA_POST_INC_TWO;
+						data->ea = ( list->c->tok == TOK_PLUS )? EA_POST_INC_ONE: EA_POST_INC_TWO;
 					}
 					data->i_reg = list->tok;
 					*tree = list;
-					list = list->b->b;
+					list = list->c->c;
 					break;
 				}
 				default: {
@@ -2384,7 +2550,7 @@ static a_token *organise_index_reg( a_token *list, resync *toks, a_token **tree,
 					}
 					data->i_reg = list->tok;
 					*tree = list;
-					list = list->b;
+					list = list->c;
 					break;
 				}
 			}
@@ -2395,7 +2561,7 @@ static a_token *organise_index_reg( a_token *list, resync *toks, a_token **tree,
 			data->ea = ind? EA_IND_OFFSET_PC: EA_OFFSET_PC;
 			data->i_reg = list->tok;
 			*tree = list;
-			list = list->b;
+			list = list->c;
 			break;
 		}
 		default: {
@@ -2410,8 +2576,9 @@ static a_token *organise_index_reg( a_token *list, resync *toks, a_token **tree,
 //
 //	Here we convert the linked list of tokens into a tree structure
 //
-static a_token *organise_arg( a_token *list, resync *toks, a_token **tree, arg_data *data, assemble_phase pass ) {
-	resync		sync1, sync2;
+static a_token *organise_arg( a_token *list, resync *toks, a_token **tree, arg_data *data ) {
+	resync		sync1,
+			sync2;
 	bool		log;
 
 	//
@@ -2425,83 +2592,156 @@ static a_token *organise_arg( a_token *list, resync *toks, a_token **tree, arg_d
 	//
 	switch( list->tok ) {
 		case TOK_OBRACKET: {
-			*tree = list;
-			tree = &( list->a );
-			list = list->b;
-			sync1.stok = TOK_COMMA;
-			sync1.prev = &sync2;
-			sync2.stok = TOK_CBRACKET;
-			sync2.prev = toks;
-			if( list->tok != TOK_COMMA ) {
-				list = organise_reg_or_value( list, &sync1, tree, data, pass );
+			//
+			//	All Effective Address indirect arguments
+			//	are handled in this case.
+			//
+			list = list->c;			// skip bracket.
+			//
+			//	At this point only interested in
+			//	the close bracket.
+			//
+			sync1.stok = TOK_CBRACKET;
+			sync1.prev = toks;
+			//
+			//	
+			if( list->tok == TOK_COMMA ) {
+				//
+				//		     Here
+				//			v
+				//		[	,IReg]		
+				//		[	,IReg++]
+				//		[	,--IReg]
+				//
+				list = organise_index_reg( list->c, &sync1, tree, true, data );
 			}
 			else {
-				*tree = NULL;
+				//
+				//	Now interested in a comma and the
+				//	outstanding close bracket.
+				//
+				sync2.stok = TOK_COMMA;
+				sync2.prev = &sync1;
+				//
+				//		     Here
+				//			v
+				//		[	Reg,IReg]
+				//		[	Num,IReg]
+				//		[	Num,PC]
+				//
+				//		[	Num]
+				//
+				list = organise_reg_or_value( list, &sync2, tree, true, data );
+				if( list->tok == TOK_COMMA ) {
+					//
+					//		     Here
+					//			v
+					//		[Reg	,IReg]
+					//		[Num	,IReg]
+					//		[Num	,PC]
+					//
+					//	Push the comma in above the previously
+					//	collected element.
+					//
+					list->a = *tree;
+					*tree = list;
+					list = organise_index_reg( list->c, &sync1, &( list->b ), true, data );
+				}
+				else {
+					//
+					//		[Num	]
+					//
+					data->ea = EA_IND_EXTENDED;
+				}
+					
 			}
-			if( list->tok == TOK_COMMA ) {
-				list->a = *tree;
-				*tree = list;
-				list = organise_index_reg( list->b, &sync2, &( list->b ), true, data );
-			}
+			//
+			//	Now only need to close down the indirect
+			//	syntax.
+			//
 			if( list->tok == TOK_CBRACKET ) {
-				list = list->b;
+				list = list->c;		// skip bracket.
 			}
 			else {
 				if( log ) log_error( "']' missing from indirection" );
 				list = do_resync( list, toks, log );
 			}
-			data->op = OP_INDEXED;
+			data->op = OP_EADRS;
 			break;
 		}
 		case TOK_DIRECT: {
-			list = list->b;
+			list = list->c;
 			list = organise_value( list, toks, tree, log );
-			data->value = evaluate_tree( *tree, pass );
+			data->value = evaluate_tree( *tree );
 			data->op = OP_DIRECT;
+			//
+			//	It seems that, historically, that
+			//	'<value,ireg' was an accepted format.
+			//	This seems to me to be contradictory
+			//	to the interpretation of the '<'
+			//	DIRECT symbol.
+			//
+			if(( option_flags & LEGACY_SYNTAX )&&( list->tok == TOK_COMMA )) {
+				//
+				//	Pick out an index the index register.
+				//
+				list->a = *tree;
+				*tree = list;
+				list = organise_index_reg( list->c, toks, &( list->b ), false, data );
+				data->op = OP_EADRS;
+			}
 			break;
 		}
 		case TOK_EXTENDED: {
-			list = list->b;
-			sync1.stok = TOK_COMMA;
-			sync1.prev = toks;
-			if( list->tok != TOK_COMMA ) {
-				list = organise_reg_or_value( list, &sync1, tree, data, pass );
-			}
-			else {
-				*tree = NULL;
-			}
-			if( list->tok == TOK_COMMA ) {
-				list->a = *tree;
-				*tree = list;
-				list = organise_index_reg( list->b, toks, &( list->b ), false, data );
-				data->op = OP_INDEXED;
-			}
+			list = list->c;
+			list = organise_value( list, toks, tree, log );
+			data->value = evaluate_tree( *tree );
+			data->op = OP_EXTENDED;
 			break;
 		}
 		case TOK_IMMEDIATE: {
-			list = list->b;
+			list = list->c;
 			list = organise_value( list, toks, tree, log );
-			data->value = evaluate_tree( *tree, pass );
+			data->value = evaluate_tree( *tree );
 			data->op = OP_IMM_UNDEF;
+			break;
+		}
+		case TOK_COMMA: {
+			//
+			//		,IReg	
+			//		,IReg++
+			//		,--IReg
+			//
+			//	Push the comma in above what ever follows.
+			//
+			list = organise_index_reg( list->c, &sync2, tree, false, data );
+			data->op = OP_EADRS;
 			break;
 		}
 		default: {
 			//
-			//	Now we analyse this for value/reg, index register
+			//	All arguments which start with a value or a register; something
+			//	other than an explicitly predictable token.
 			//
 			sync1.stok = TOK_COMMA;
 			sync1.prev = toks;
-			if( list->tok != TOK_COMMA ) {
-				list = organise_reg_or_value( list, &sync1, tree, data, pass );
-			}
-			else {
-				*tree = NULL;
-			}
+			list = organise_reg_or_value( list, &sync1, tree, false, data );
 			if( list->tok == TOK_COMMA ) {
+				//
+				//		Reg,IReg
+				//		Num,IReg
+				//		Num,PC
+				//
 				list->a = *tree;
 				*tree = list;
-				list = organise_index_reg( list->b, toks, &( list->b ), false, data );
-				data->op = OP_INDEXED;
+				list = organise_index_reg( list->c, toks, &( list->b ), false, data );
+				data->op = OP_EADRS;
+			}
+			else {
+				//
+				//		Num
+				//
+				data->op = OP_EXTENDED;
 			}
 			break;
 		}
@@ -2510,10 +2750,96 @@ static a_token *organise_arg( a_token *list, resync *toks, a_token **tree, arg_d
 }
 
 //
+//	Some more direct debugging assist.
+//
+#ifdef ENABLE_DEBUG
+static void display_indent( FILE *to, int width ) {
+	while( width-- > 0 )  fprintf( to, "  " );
+}
+static char *display_token_id( arg_tokens id ) {
+	token_defn	*look;
+	char		*found;
+
+	switch( id ) {
+		case TOK_SYMBOL:	return( "Symbol" );
+		case TOK_VALUE:		return( "Value" );
+		case TOK_STRING:	return( "String" );
+		case TOK_CHARACTER:	return( "Character" );
+		case TOK_LEGACY_STRING:	return( "LegacyString" );
+		case TOK_LEGACY_CHARACTER: return( "LegacyChar" );
+		case TOK_ERROR:		return( "Error" );
+		case TOK_EOS:		return( "End" );
+		default: break;
+	}
+	found = NULL;
+	for( look = fixed_tokens; look->text; look++ ) {
+		if( id == look->token ) found = look->text;
+	}
+	if( found ) return( found );
+	for( look = fixed_register; look->text; look++ ) {
+		if( id == look->token ) found = look->text;
+	}
+	return( found );
+}
+static void _display_token_tree( FILE *to, int depth, a_token *tree ) {
+	if( tree ) {
+		char	*text;
+
+		display_indent( to, depth );
+		if(( text = display_token_id( tree->tok ))) {
+			fprintf( to, "%s", text );
+		}
+		else {
+			fprintf( to, "tok %d?", tree->tok );
+		}
+		if(( text = tree->start )) {
+			int	l;
+
+			fprintf( to, "'" );
+			l = tree->len;
+			while( l-- ) fprintf( to, "%c", *text++ );
+			fprintf( to, "'" );
+		}
+		fprintf( to, "\n" );
+		_display_token_tree( to, depth+1, tree->a );
+		_display_token_tree( to, depth+1, tree->b );
+	}
+}
+static void display_token_tree( FILE *to, char *label, a_token *tree ) {
+	fprintf( stdout, "%s:\n", label );
+	_display_token_tree( stdout, 1, tree );
+}
+static void display_token_list( FILE *to, char *label, a_token *tree ) {
+	fprintf( stdout, "%s:\n", label );
+	while( tree ) {
+		char	*text;
+
+		display_indent( to, 1 );
+		if(( text = display_token_id( tree->tok ))) {
+			fprintf( to, "%s", text );
+		}
+		else {
+			fprintf( to, "tok %d?", tree->tok );
+		}
+		if((( text = tree->start ))&&( tree->len > 0 )) {
+			int	l;
+
+			fprintf( to, "'" );
+			l = tree->len;
+			while( l-- ) fprintf( to, "%c", *text++ );
+			fprintf( to, "'" );
+		}
+		fprintf( to, "\n" );
+		tree = tree->c;
+	}
+}
+#endif
+
+//
 //	given a string, return the object described (true on success,
 //	false on error)
 //
-static bool analyse_arg( char *input, arg_data *result, assemble_phase pass ) {
+static bool analyse_arg( char *input, arg_data *result ) {
 	a_token		*head, **tail, *ptr;
 	resync		sync;
 	
@@ -2526,10 +2852,19 @@ static bool analyse_arg( char *input, arg_data *result, assemble_phase pass ) {
 		ptr = STACK( a_token );
 		input = get_token( input, ptr );
 		ptr->a = NULL;
+		ptr->b = NULL;
 		*tail = ptr;
-		tail = &( ptr->b );
+		tail = &( ptr->c );
 	} while( ptr->tok != TOK_EOS );
 	*tail = NULL;
+	
+#ifdef ENABLE_DEBUG
+	//
+	//	Display the argument before analysis.
+	//
+	if( option_flags & DISPLAY_VEBOSE ) display_token_list( stdout, "tokenised", head );
+#endif
+
 	//
 	//	Tokens all chained together on "b" pointer.
 	//	Convert to a parse tree (of sorts).
@@ -2537,10 +2872,19 @@ static bool analyse_arg( char *input, arg_data *result, assemble_phase pass ) {
 	sync.stok = TOK_EOS;
 	sync.prev = NULL;
 	ptr = NULL;
-	if(( head = organise_arg( head, &sync, &ptr, result, pass )) == NULL ) {
+	if(( head = organise_arg( head, &sync, &ptr, result )) == NULL ) {
 		log_error( "Unrecognised argument structure" );
 		return( false );
 	}
+
+	
+#ifdef ENABLE_DEBUG
+	//
+	//	Display the argument after analysis.
+	//
+	if( option_flags & DISPLAY_VEBOSE ) display_token_tree( stdout, "parsed", ptr );
+#endif
+
 	//
 	//	If the head record is not TOK_EOS and the register pair
 	//	or list list code did not find anything then something
@@ -2564,7 +2908,7 @@ static bool analyse_arg( char *input, arg_data *result, assemble_phase pass ) {
 //	a series of byte values, otherwise only the first
 //	value will be returned (with warning generated).
 //
-static int analyse_value( char *input, assemble_phase pass, bool split, int max, word *result ) {
+static int analyse_value( char *input, bool split, int max, word *result ) {
 	a_token	*head, **tail, *ptr, *look;
 	resync	sync;
 	int	count;
@@ -2580,12 +2924,21 @@ static int analyse_value( char *input, assemble_phase pass, bool split, int max,
 		ptr = STACK( a_token );
 		input = get_token( input, ptr );
 		ptr->a = NULL;
+		ptr->b = NULL;
 		*tail = ptr;
-		tail = &( ptr->b );
+		tail = &( ptr->c );
 	} while( ptr->tok != TOK_EOS );
 	*tail = NULL;
+	
+#ifdef ENABLE_DEBUG
 	//
-	//	Tokens all chained together on "b".  Now we look for
+	//	Display the argument before analysis.
+	//
+	if( option_flags & DISPLAY_VEBOSE ) display_token_list( stdout, "tokenised", head );
+#endif
+
+	//
+	//	Tokens all chained together on "c".  Now we look for
 	//	comma symbols, and break the list into smaller pieces
 	//	which are then handled individually.
 	//
@@ -2594,7 +2947,7 @@ static int analyse_value( char *input, assemble_phase pass, bool split, int max,
 		//
 		//	find comma or eos
 		//
-		for( look = head; look->tok != TOK_EOS; look = look->b ) {
+		for( look = head; look->tok != TOK_EOS; look = look->c ) {
 			if( look->tok == TOK_COMMA ) break;
 		}
 		//
@@ -2602,7 +2955,7 @@ static int analyse_value( char *input, assemble_phase pass, bool split, int max,
 		//
 		if( look->tok == TOK_COMMA ) {
 			look->tok = TOK_EOS;
-			look = look->b;
+			look = look->c;
 		}
 		//
 		//	Are we "de-string-ing" a value?
@@ -2644,7 +2997,7 @@ static int analyse_value( char *input, assemble_phase pass, bool split, int max,
 						//
 						//	Evaluate tree at ptr and add to results
 						//
-						result[ count++ ] = evaluate_tree( ptr, pass );
+						result[ count++ ] = evaluate_tree( ptr );
 					}
 					else {
 						log_error( "Too many values provided" );
@@ -2697,7 +3050,7 @@ static byte ea_index_register( arg_tokens reg ) {
 	return( 0 );
 }
 
-static bool process_machine_inst( int line, char *opcode, char *arg, assemble_phase pass ) {
+static bool process_machine_inst( int line, char *opcode, char *arg ) {
 	arg_data	data;
 
 	//
@@ -2709,7 +3062,7 @@ static bool process_machine_inst( int line, char *opcode, char *arg, assemble_ph
 	//	the opcode lookup as we really only want to do this once.
 	//
 	if( arg != NULL ) {
-		if( !analyse_arg( arg, &data, pass )) {
+		if( !analyse_arg( arg, &data )) {
 			log_error( "Invalid argument" );
 			return( false );
 		}
@@ -2718,7 +3071,7 @@ static bool process_machine_inst( int line, char *opcode, char *arg, assemble_ph
 	//	Outer loop: seach for opcode records which match the head of
 	//	the supplied opcode
 	//
-	for( op_code *o = mc6809_op; o->name; o++ ) {
+	for( op_code *o = instruction_table; o->name; o++ ) {
 		if( iscasehead( o->name, opcode )) {
 			char	*oo;
 			op_ext	*e;
@@ -2731,6 +3084,11 @@ static bool process_machine_inst( int line, char *opcode, char *arg, assemble_ph
 			ASSERT( o->args != NULL );
 
 			//
+			//	Found a match on the start of the opcode.
+			//
+			PRINT_VERBOSE(( "Opcode='%s'.\n", o->name ));
+
+			//
 			//	If there are extensions, then we need to find
 			//	the one that matches.
 			//
@@ -2738,7 +3096,16 @@ static bool process_machine_inst( int line, char *opcode, char *arg, assemble_ph
 			for( e = o->exts; e->extn; e++ ) {
 				if( strcasecmp( oo, e->extn ) == 0 ) break;
 			}
-			if( e->extn == NULL ) continue;
+			if( e->extn == NULL ) {
+				PRINT_VERBOSE(( "No match\n" ));
+				continue;
+			}
+
+			//
+			//	Found a match on the opcode extension
+			//
+			PRINT_VERBOSE(( "Match extend='%s'.\n", e->extn ));
+			
 			//
 			//	If there should be an argument then we process it, and try to
 			//	match against the list provided.
@@ -2754,31 +3121,52 @@ static bool process_machine_inst( int line, char *opcode, char *arg, assemble_ph
 				//	the extended address is the same as the declared DP
 				//	then we have a match.
 				//
-				if(( a->mode == OP_DIRECT )&&( data.op == OP_EXTENDED )&&( H( data.value ) == direct_page )) break;
+				if(( a->mode == OP_DIRECT )&&( data.op == OP_EXTENDED )&&( H( data.value ) == direct_page )) {
+					PRINT_VERBOSE(( "Arg: Direct\n" ));
+					break;
+				}
 				//
 				//	Immediate values are always 'undefined' and so need
 				//	either an immediate byte or word opcode.
 				//
-				if((( a->mode == OP_IMM_BYTE )||( a->mode == OP_IMM_WORD ))&&( data.op == OP_IMM_UNDEF )) break;
+				if((( a->mode == OP_IMM_BYTE )||( a->mode == OP_IMM_WORD ))&&( data.op == OP_IMM_UNDEF )) {
+					PRINT_VERBOSE(( "Arg: Immediate\n" ));
+					break;
+				}
 				//
 				//	Register lists match either a pair of registers or
 				//	a bit map set of registers - depeneding on the number
 				//	of registers provided.
 				//
-				if(( a->mode == OP_REG_PAIR )&&( data.reg_count == 2 )) break;
-				if(( a->mode == OP_REG_LIST )&&( data.reg_count > 0 )) break;
+				if(( a->mode == OP_REG_PAIR )&&( data.reg_count == 2 )) {
+					PRINT_VERBOSE(( "Arg: Reg Pair\n" ));
+					break;
+				}
+				if(( a->mode == OP_REG_LIST )&&( data.reg_count > 0 )) {
+					PRINT_VERBOSE(( "Arg: Reg List\n" ));
+					break;
+				}
 				//
 				//	An extended argument is also a euphamism for any jump
 				//	or call target address.
 				//
-				if((( a->mode == OP_SRELATIVE )||( a->mode == OP_LRELATIVE ))&&( data.op == OP_EXTENDED )) break;
+				if((( a->mode == OP_SRELATIVE )||( a->mode == OP_LRELATIVE ))&&( data.op == OP_EXTENDED )) {
+					PRINT_VERBOSE(( "Arg: Relative jump\n" ));
+					break;
+				}
 				//
 				//	Obviously if the format of the argument actually matches
 				//	the specification of the op-code then we have a winner!
 				//
-				if( data.op == a->mode ) break;
+				if( data.op == a->mode ) {
+					PRINT_VERBOSE(( "Arg: exact match!\n" ));
+					break;
+				}
 			}
-			if( a->mode == OP_NONE ) continue;
+			if( a->mode == OP_NONE ) {
+				PRINT_VERBOSE(( "No argument match\n" ));
+				continue;
+			}
 			//
 			//	At this point we *should* have everything we need to generate
 			//	the complete machine code;
@@ -2787,7 +3175,7 @@ static bool process_machine_inst( int line, char *opcode, char *arg, assemble_ph
 			//	e	->	Extension modifications
 			//	a	->	Argument modifications
 			//
-			if( option_flags & DEBUG_ENABLE ) printf( "Decode:%d|%s|%s|\n", line, o->name, e->extn );
+			PRINT_DEBUG(( "Decode:%d|%s|%s|\n", line, o->name, e->extn ));
 			//
 			//	Build the base machine instruction value.
 			//
@@ -2815,18 +3203,26 @@ static bool process_machine_inst( int line, char *opcode, char *arg, assemble_ph
 					break;
 				}
 				case OP_IMM_BYTE: {			// #byte
-					if(( data.value < -128 )||( data.value > 255 )) if( pass == GENERATOR_PHASE ) log_error( "Immediate value out of byte range" );
+					if(( data.value < -128 )||( data.value > 255 )) if( assembler_pass == GENERATOR_PHASE ) log_error( "Immediate value out of byte range" );
 					inst[ len++ ] = L( data.value );
 					break;
 				}
 				case OP_IMM_WORD: {			// #word
-					if(( data.value < -32768 )||( data.value > 65535 )) if( pass == GENERATOR_PHASE ) log_error( "Immediate value out of word range" );
+					if(( data.value < -32768 )||( data.value > 65535 )) if( assembler_pass == GENERATOR_PHASE ) log_error( "Immediate value out of word range" );
 					inst[ len++ ] = H( data.value );
 					inst[ len++ ] = L( data.value );
 					break;
 				}
 				case OP_DIRECT: {			// value (8-bit with DP)
-					if((( data.value < 0 )||( data.value > 255 ))&&( H( data.value ) != direct_page )) if( pass == GENERATOR_PHASE ) log_error( "Direct page index out of range" );
+					//
+					//	Here we need to be aware that we migght be called with
+					//	either and 8 bit value or a 16 bit value.  If an 8 bit
+					//	value is supplied (value 0..255) then it is a valid
+					//	direct page index.  If it is outside this range then
+					//	the top byte of the value must match the assembler
+					//	copy of the DP register.
+					//
+					if((( data.value < 0 )||( data.value > 255 ))&&( H( data.value ) != direct_page )) if( assembler_pass == GENERATOR_PHASE ) log_error( "Direct page index out of range" );
 					inst[ len++ ] = L( data.value );
 					break;
 				}
@@ -2839,7 +3235,7 @@ static bool process_machine_inst( int line, char *opcode, char *arg, assemble_ph
 					inst[ len++ ] = L( data.value );
 					break;
 				}
-				case OP_INDEXED: {			// Effective Address
+				case OP_EADRS: {			// Effective Address
 					//
 					//	Need to break with down based on the effective address
 					//
@@ -2922,7 +3318,7 @@ static bool process_machine_inst( int line, char *opcode, char *arg, assemble_ph
 									break;
 								}
 								default: {
-									log_error( "Invalid Accumulator in EA (assembler programming error)" );
+									ABORT( "Invalid Accumulator in EA (assembler programming error)" );
 									break;
 								}
 							}
@@ -2984,7 +3380,7 @@ static bool process_machine_inst( int line, char *opcode, char *arg, assemble_ph
 							break;
 						}
 						default: {
-							log_error( "Invalid EA (assembler programming error)" );
+							ABORT( "Invalid EA (assembler programming error)" );
 							break;
 						}
 					}
@@ -3002,7 +3398,7 @@ static bool process_machine_inst( int line, char *opcode, char *arg, assemble_ph
 					//	Range check
 					//
 					if(( H( j ) != 0 )&&( H( j ) !=  0xff )) {
-						if( pass == GENERATOR_PHASE ) log_error( "Short relative jump out of range" );
+						if( assembler_pass == GENERATOR_PHASE ) log_error( "Short relative jump out of range" );
 					}
 					inst[ i ] = L( j );
 					break;
@@ -3031,7 +3427,7 @@ static bool process_machine_inst( int line, char *opcode, char *arg, assemble_ph
 					break;
 				}
 				default: {
-					log_error( "Programmer error" );
+					ABORT( "Unrecognised OP mode (Assembler programmer error)" );
 					break;
 				}
 			}
@@ -3041,7 +3437,7 @@ static bool process_machine_inst( int line, char *opcode, char *arg, assemble_ph
 			//
 			//	Output instruction (if appropiate)
 			//
-			if( pass == GENERATOR_PHASE ) {
+			if( assembler_pass == GENERATOR_PHASE ) {
 				set_address( this_address );
 				for( i = 0; i < len; i++ ) add_byte( inst[ i ]);
 			}
@@ -3065,15 +3461,15 @@ static bool process_machine_inst( int line, char *opcode, char *arg, assemble_ph
 //
 ////////////////////////////////////////////////////////////////////////
 
-static bool asm_equ( int line, char *label, char *opcode, char *arg, assemble_phase pass ) {
+static bool asm_equ( int line, char *label, char *opcode, char *arg ) {
 	word	val;
 	
-	if( analyse_value( arg, pass, false, 1, &val ) == 1 ) {
+	if( analyse_value( arg, false, 1, &val ) == 1 ) {
 		//
 		//	Have value, set label
 		//
-		if( set_symbol( label, val, pass )) return( true );
-		if( pass == GATHER_PHASE ) {
+		if( set_symbol( label, val )) return( true );
+		if( assembler_pass == GATHER_PHASE ) {
 			log_error( "Duplicate label asignment in EQU" );
 		}
 		else {
@@ -3085,14 +3481,14 @@ static bool asm_equ( int line, char *label, char *opcode, char *arg, assemble_ph
 	return( false );
 }
 
-static bool asm_setdp( int line, char *label, char *opcode, char *arg, assemble_phase pass ) {
+static bool asm_setdp( int line, char *label, char *opcode, char *arg ) {
 	word	val;
 	bool	ret;
 
 	ret = true;
 	if( label ) {
-		if( !set_symbol( label, this_address, pass )) {
-			if( pass == GATHER_PHASE ) {
+		if( !set_symbol( label, this_address )) {
+			if( assembler_pass == GATHER_PHASE ) {
 				log_error( "Duplicate label for SETDP" );
 			}
 			else {
@@ -3101,7 +3497,7 @@ static bool asm_setdp( int line, char *label, char *opcode, char *arg, assemble_
 			ret = false;
 		}
 	}
-	if( analyse_value( arg, pass, false, 1, &val ) == 1 ) {
+	if( analyse_value( arg, false, 1, &val ) == 1 ) {
 		//
 		//	Have value, set virtual DP.
 		//
@@ -3130,17 +3526,17 @@ static bool asm_setdp( int line, char *label, char *opcode, char *arg, assemble_
 	return( false );
 }
 
-static bool asm_org( int line, char *label, char *opcode, char *arg, assemble_phase pass ) {
+static bool asm_org( int line, char *label, char *opcode, char *arg ) {
 	word	val;
 
-	if( analyse_value( arg, pass, false, 1, &val ) == 1 ) {
+	if( analyse_value( arg, false, 1, &val ) == 1 ) {
 		//
 		//	Have value, set this address
 		//
 		this_address = set_pc( val );
 		if( label ) {
-			if( !set_symbol( label, this_address, pass )) {
-				if( pass == GATHER_PHASE ) {
+			if( !set_symbol( label, this_address )) {
+				if( assembler_pass == GATHER_PHASE ) {
 					log_error( "Duplicate label for ORG" );
 				}
 				else {
@@ -3155,15 +3551,15 @@ static bool asm_org( int line, char *label, char *opcode, char *arg, assemble_ph
 	return( false );
 }
 
-static bool _asm_db( int line, char *label, char *opcode, char *arg, assemble_phase pass, bool n_flag, bool s_flag ) {
+static bool _asm_db( int line, char *label, char *opcode, char *arg, bool n_flag, bool s_flag ) {
 	word	constants[ MAX_CONSTANTS ];
 	int	l;
 	bool	ret;
 
 	ret = true;
 	if( label ) {
-		if( !set_symbol( label, this_address, pass )) {
-			if( pass == GATHER_PHASE ) {
+		if( !set_symbol( label, this_address )) {
+			if( assembler_pass == GATHER_PHASE ) {
 				log_error( "Duplicate label for DB" );
 			}
 			else {
@@ -3172,11 +3568,11 @@ static bool _asm_db( int line, char *label, char *opcode, char *arg, assemble_ph
 			ret = false;
 		}
 	}
-	if(( l = analyse_value( arg, pass, true, MAX_CONSTANTS, constants )) <= 0 ) {
+	if(( l = analyse_value( arg, true, MAX_CONSTANTS, constants )) <= 0 ) {
 		log_error( "Error in DB constants" );
 		return( false );
 	}
-	if( pass == GENERATOR_PHASE ) {
+	if( assembler_pass == GENERATOR_PHASE ) {
 		set_address( this_address );
 		for( int i = 0; i < l; i++ ) {
 			if(( H( constants[ i ]) != 0 )&&( H( constants[ i ]) != 0xff )) log_error( "Byte contant in DB too big" );
@@ -3194,28 +3590,28 @@ static bool _asm_db( int line, char *label, char *opcode, char *arg, assemble_ph
 	return( ret );
 }
 
-static bool asm_db( int line, char *label, char *opcode, char *arg, assemble_phase pass ) {
-	return( _asm_db( line, label, opcode, arg, pass, false, false ));
+static bool asm_db( int line, char *label, char *opcode, char *arg ) {
+	return( _asm_db( line, label, opcode, arg, false, false ));
 }
 
-static bool asm_db_n( int line, char *label, char *opcode, char *arg, assemble_phase pass ) {
-	return( _asm_db( line, label, opcode, arg, pass, true, false ));
+static bool asm_db_n( int line, char *label, char *opcode, char *arg ) {
+	return( _asm_db( line, label, opcode, arg, true, false ));
 }
 
-static bool asm_db_s( int line, char *label, char *opcode, char *arg, assemble_phase pass ) {
-	return( _asm_db( line, label, opcode, arg, pass, false, true ));
+static bool asm_db_s( int line, char *label, char *opcode, char *arg ) {
+	return( _asm_db( line, label, opcode, arg, false, true ));
 }
 
 
-static bool asm_dw( int line, char *label, char *opcode, char *arg, assemble_phase pass ) {
+static bool asm_dw( int line, char *label, char *opcode, char *arg ) {
 	word	constants[ MAX_CONSTANTS ];
 	int	len;
 	bool	ret;
 
 	ret = true;
 	if( label ) {
-		if( !set_symbol( label, this_address, pass )) {
-			if( pass == GATHER_PHASE ) {
+		if( !set_symbol( label, this_address )) {
+			if( assembler_pass == GATHER_PHASE ) {
 				log_error( "Duplicate label for DW" );
 			}
 			else {
@@ -3224,11 +3620,11 @@ static bool asm_dw( int line, char *label, char *opcode, char *arg, assemble_pha
 			ret = false;
 		}
 	}
-	if(( len = analyse_value( arg, pass, true, MAX_CONSTANTS, constants )) <= 0 ) {
+	if(( len = analyse_value( arg, true, MAX_CONSTANTS, constants )) <= 0 ) {
 		log_error( "Error in constants" );
 		return( false );
 	}
-	if( pass == GENERATOR_PHASE ) {
+	if( assembler_pass == GENERATOR_PHASE ) {
 		set_address( this_address );
 		for( int i = 0; i < len; i++ ) {
 			add_byte( H( constants[ i ]));
@@ -3239,14 +3635,14 @@ static bool asm_dw( int line, char *label, char *opcode, char *arg, assemble_pha
 	return( ret );
 }
 
-static bool asm_ds( int line, char *label, char *opcode, char *arg, assemble_phase pass ) {
+static bool asm_ds( int line, char *label, char *opcode, char *arg ) {
 	word	val;
 	bool	ret;
 
 	ret = true;
 	if( label ) {
-		if( !set_symbol( label, this_address, pass )) {
-			if( pass == GATHER_PHASE ) {
+		if( !set_symbol( label, this_address )) {
+			if( assembler_pass == GATHER_PHASE ) {
 				log_error( "Duplicate label for DS" );
 			}
 			else {
@@ -3255,7 +3651,7 @@ static bool asm_ds( int line, char *label, char *opcode, char *arg, assemble_pha
 			ret = false;
 		}
 	}
-	if( analyse_value( arg, pass, false, 1, &val ) == 1 ) {
+	if( analyse_value( arg, false, 1, &val ) == 1 ) {
 		this_address = advance_pc( this_address, val );
 		return( ret );
 	}
@@ -3263,11 +3659,11 @@ static bool asm_ds( int line, char *label, char *opcode, char *arg, assemble_pha
 	return( false );
 }
 
-static bool asm_align( int line, char *label, char *opcode, char *arg, assemble_phase pass ) {
+static bool asm_align( int line, char *label, char *opcode, char *arg ) {
 	word	val;
 	int	s;
 	
-	if( analyse_value( arg, pass, false, 1, &val ) == 1 ) {
+	if( analyse_value( arg, false, 1, &val ) == 1 ) {
 		if( val == 0 ) {
 			log_error( "Zero alignment invalid" );
 			return( false );
@@ -3285,8 +3681,8 @@ static bool asm_align( int line, char *label, char *opcode, char *arg, assemble_
 		val = (( this_address + val )& ~val )- this_address;
 		this_address = advance_pc( this_address, val );
 		if( label ) {
-			if( !set_symbol( label, this_address, pass )) {
-				if( pass == GATHER_PHASE ) {
+			if( !set_symbol( label, this_address )) {
+				if( assembler_pass == GATHER_PHASE ) {
 					log_error( "Duplicate label for ALIGN" );
 				}
 				else {
@@ -3304,7 +3700,7 @@ static bool asm_align( int line, char *label, char *opcode, char *arg, assemble_
 
 
 
-static bool _asm_fill( int line, char *label, char *opcode, char *arg, assemble_phase pass, bool is_fill ) {
+static bool _asm_fill( int line, char *label, char *opcode, char *arg, bool is_fill ) {
 	word	constants[ 2 ],
 		fill,
 		count;
@@ -3313,8 +3709,8 @@ static bool _asm_fill( int line, char *label, char *opcode, char *arg, assemble_
 
 	ret = true;
 	if( label ) {
-		if( !set_symbol( label, this_address, pass )) {
-			if( pass == GATHER_PHASE ) {
+		if( !set_symbol( label, this_address )) {
+			if( assembler_pass == GATHER_PHASE ) {
 				log_error( "Duplicate label for FILL/RZB" );
 			}
 			else {
@@ -3323,7 +3719,7 @@ static bool _asm_fill( int line, char *label, char *opcode, char *arg, assemble_
 			ret = false;
 		}
 	}
-	if(( l = analyse_value( arg, pass, false, 2, constants )) < 1 ) {
+	if(( l = analyse_value( arg, false, 2, constants )) < 1 ) {
 		log_error( "Error in FILL/RZB constants" );
 		return( false );
 	}
@@ -3346,11 +3742,11 @@ static bool _asm_fill( int line, char *label, char *opcode, char *arg, assemble_
 			fill = 0x00;
 		}
 	}
-	if(( pass != GENERATOR_PHASE )&&( count > MAX_FILL )) {
+	if(( assembler_pass != GENERATOR_PHASE )&&( count > MAX_FILL )) {
 		log_warning( "FILL/RZB too big, resetting" );
 		count = 0;
 	}
-	if(( pass == GENERATOR_PHASE )&&( count > 0 )) {
+	if(( assembler_pass == GENERATOR_PHASE )&&( count > 0 )) {
 		if(( H( fill ) != 0 )&&( H( fill ) != 0xff )) log_error( "Filler in FILL/RZB not 8 bit value" );
 		set_address( this_address );
 		for( int i = 0; i < count; i++ ) add_byte( L( fill ));
@@ -3362,15 +3758,15 @@ static bool _asm_fill( int line, char *label, char *opcode, char *arg, assemble_
 
 
 
-static bool asm_fill( int line, char *label, char *opcode, char *arg, assemble_phase pass ) {
-	return( _asm_fill( line, label, opcode, arg,  pass, true ) );
+static bool asm_fill( int line, char *label, char *opcode, char *arg ) {
+	return( _asm_fill( line, label, opcode, arg, true ) );
 }
 
-static bool asm_rzb( int line, char *label, char *opcode, char *arg, assemble_phase pass ) {
-	return( _asm_fill( line, label, opcode, arg,  pass, false ) );
+static bool asm_rzb( int line, char *label, char *opcode, char *arg ) {
+	return( _asm_fill( line, label, opcode, arg, false ) );
 }
 
-static bool asm_unsupported( int line, char *label, char *opcode, char *arg, assemble_phase pass ) {
+static bool asm_unsupported( int line, char *label, char *opcode, char *arg ) {
 	return( false );
 }
 
@@ -3380,15 +3776,15 @@ static bool asm_unsupported( int line, char *label, char *opcode, char *arg, ass
 //
 static bool end_not_reached = true;
 
-static bool asm_end( int line, char *label, char *opcode, char *arg, assemble_phase pass ) {
+static bool asm_end( int line, char *label, char *opcode, char *arg ) {
 	word	val;
 	bool	ret;
 
 	end_not_reached = false;
 	ret = true;
 	if( label ) {
-		if( !set_symbol( label, this_address, pass )) {
-			if( pass == GATHER_PHASE ) {
+		if( !set_symbol( label, this_address )) {
+			if( assembler_pass == GATHER_PHASE ) {
 				log_error( "Duplicate label for END" );
 			}
 			else {
@@ -3397,7 +3793,7 @@ static bool asm_end( int line, char *label, char *opcode, char *arg, assemble_ph
 			ret = false;
 		}
 	}
-	if( analyse_value( arg, pass, false, 1, &val ) == 1 ) {
+	if( analyse_value( arg, false, 1, &val ) == 1 ) {
 		//
 		//	Have value, set this address as the start address
 		//	of the executable.
@@ -3414,7 +3810,7 @@ static bool asm_end( int line, char *label, char *opcode, char *arg, assemble_ph
 //
 //	Simple pointer to handle function type.
 //
-typedef bool FUNC( directive )( int line, char *label, char *opcode, char *arg, assemble_phase pass );
+typedef bool FUNC( directive )( int line, char *label, char *opcode, char *arg );
 
 //
 //	Define table of directive and handler functions
@@ -3514,7 +3910,7 @@ static directive find_directive( char *command ) {
 ////////////////////////////////////////////////////////////////////////
 //
 //	parse_input - read the supplied stream end-to-end
-//	and (depending on pass) gather data on the source
+//	and (depending on assembler_pass) gather data on the source
 //	or emit machine code information
 //
 ////////////////////////////////////////////////////////////////////////
@@ -3662,7 +4058,7 @@ static bool break_line( char *line, char **label, char **opcode, char **arg, cha
 	return( true );
 }
 
-static int parse_input( FILE *input, assemble_phase pass ) {
+static int parse_input( FILE *input ) {
 	char		line[ BUFFER ],
 			*label,
 			*opcode,
@@ -3685,12 +4081,12 @@ static int parse_input( FILE *input, assemble_phase pass ) {
 		//	if we are generating code.
 		//
 		count++;
-		if( pass == GENERATOR_PHASE ) next_line( count, line );
+		if( assembler_pass == GENERATOR_PHASE ) next_line( count, line );
 		//
 		//	What does it contain?
 		//
 		if( break_line( line, &label, &opcode, &arg, &comment )) {
-			if( option_flags & DEBUG_ENABLE ) printf( "Input:%d|%s|%s|%s|%s\n", count, label, opcode, arg, comment );
+			PRINT_DEBUG(( "Input:%d|%s|%s|%s|%s\n", count, label, opcode, arg, comment ));
 			//
 			//	Anything to do?
 			//
@@ -3699,17 +4095,17 @@ static int parse_input( FILE *input, assemble_phase pass ) {
 				//	Is this an assembler command?
 				//
 				if(( dptr = find_directive( opcode )) != NULL ) {
-					if( !FUNC( dptr )( count, label, opcode, arg, pass )) log_error( "Assembler directive error" );
+					if( !FUNC( dptr )( count, label, opcode, arg )) log_error( "Assembler directive error" );
 				}
 				else {
 					//
 					//	If there is a label, note its address
 					//
-					if( label != NULL ) set_symbol( label, this_address, pass );
+					if( label != NULL ) set_symbol( label, this_address );
 					//
 					//	Now process the machine instruction
 					//
-					if( !process_machine_inst( count, opcode, arg, pass )) log_error( "Machine instruction error" );
+					if( !process_machine_inst( count, opcode, arg )) log_error( "Machine instruction error" );
 				}
 			}
 			else {
@@ -3717,7 +4113,7 @@ static int parse_input( FILE *input, assemble_phase pass ) {
 				//	No opcode, so only need to do anything if there is a label.
 				//
 				if( label ) {
-					if( !set_symbol( label, this_address, pass )) log_error( "Inconsistent label value" );
+					if( !set_symbol( label, this_address )) log_error( "Inconsistent label value" );
 				}
 			}
 		}
@@ -3757,22 +4153,47 @@ static int parse_input( FILE *input, assemble_phase pass ) {
 //	Implement a simplistic argument processing system
 //
 typedef struct {
-	char		*name, *help;
-	int		set, reset;
+	char		*name,
+			*help;
+	program_options	set,
+			reset;
+	inst_options	iso;
 } option;
 static option options[] = {
-	{	"--hexadecimal",	"\tOutput text hexadecimal values",	DISPLAY_TEXT,		DISPLAY_MASK		},
-	{	"--intel",		"\t\tOutput Intel Hex format data",	DISPLAY_INTEL,		DISPLAY_MASK		},
-	{	"--motorola",		"\tOutput Motorola S records",		DISPLAY_MOTOROLA,	DISPLAY_MASK		},
-	{	"--listing",		"\tDisplay an assembly listing",	DISPLAY_LISTING,	DISPLAY_MASK		},
-	{	"--no-output",		"\tDo not output any code",		DISPLAY_NOTHING,	DISPLAY_MASK		},
-	{	"--stdout",		"\tSend output to console",		DISPLAY_STDOUT,		0			},
-	{	"--legacy-syntax",	"\tAccept legacy Motorola syntax",	LEGACY_SYNTAX,		0			},
-	{	"--symbols",		"\tOutput Symbol table",		DISPLAY_SYMBOLS,	0			},
-	{	"--dump-opcodes",	"\tDisplay op-codes table",		DISPLAY_OPCODES,	0			},
-	{	"--help",		"\t\tDisplay this help information",	DISPLAY_HELP,		0			},
-	{	"--debug",		"\t\tEnable additonal debugging output",DEBUG_ENABLE,		0			},
-	{	NULL														}
+	//
+	//	Output related options.
+	//
+	{	"--hexadecimal",	"\tOutput text hexadecimal values",	DISPLAY_TEXT,		DISPLAY_MASK,		ISO_NONE	},
+	{	"--intel",		"\t\tOutput Intel Hex format data",	DISPLAY_INTEL,		DISPLAY_MASK,		ISO_NONE	},
+	{	"--motorola",		"\tOutput Motorola S records",		DISPLAY_MOTOROLA,	DISPLAY_MASK,		ISO_NONE	},
+	{	"--listing",		"\tOutput an assembly listing",		DISPLAY_LISTING,	DISPLAY_MASK,		ISO_NONE	},
+	{	"--no-output",		"\tDo not output any code",		DISPLAY_NOTHING,	DISPLAY_MASK,		ISO_NONE	},
+	{	"--stdout",		"\tSend output to console",		DISPLAY_STDOUT,		OPTIONS_NONE,		ISO_NONE	},
+	//
+	//	Syntax options.
+	//
+	{	"--legacy-syntax",	"\tAccept legacy Motorola syntax",	LEGACY_SYNTAX,		OPTIONS_NONE,		ISO_NONE	},
+	//
+	//	Assembly information.
+	//
+	{	"--symbols",		"\tOutput Symbol table",		DISPLAY_SYMBOLS,	OPTIONS_NONE,		ISO_NONE	},
+	{	"--dump-opcodes",	"\tDisplay op-codes table",		DISPLAY_OPCODES,	OPTIONS_NONE,		ISO_NONE	},
+	//
+	//	Instruction Set options.
+	//
+	{	"--mc6809",		"\tSelect MC6809 instructions",		OPTIONS_NONE,		OPTIONS_NONE,		ISO_MC6809		},
+	{	"--hd6309",		"\tMC6809 and HD6309 instructions",	OPTIONS_NONE,		OPTIONS_NONE,		ISO_MC6809|ISO_HD6309	},
+	{	"--undocumented",	"\tInclude undocumented instructions",	OPTIONS_NONE,		OPTIONS_NONE,		ISO_UNDOCUMENTED	},
+	{	"--aliases",		"\tInclude instruction aliases",	OPTIONS_NONE,		OPTIONS_NONE,		ISO_ALIASES		},
+	//
+	//	Command line help and debugging (if selected at compile time).
+	//
+	{	"--help",		"\t\tDisplay this help information",	DISPLAY_HELP,		OPTIONS_NONE,		ISO_NONE	},
+#ifdef ENABLE_DEBUG
+	{	"--debug",		"\t\tEnable debugging output",		DISPLAY_DEBUG,		OPTIONS_NONE,		ISO_NONE	},
+	{	"--debug-verbose",	"\tAdditional debugging output",	DISPLAY_DEBUG|DISPLAY_VEBOSE,	OPTIONS_NONE,	ISO_NONE	},
+#endif
+	{	NULL																}
 };
 
 //
@@ -3796,6 +4217,7 @@ static int parse_arguments( int argc, char **argv ) {
 			}
 			if( o->name != NULL ) {
 				option_flags = ( option_flags & ~o->reset ) | o->set;
+				iso_options |= o->iso;
 			}
 			else {
 				fprintf( stderr, "Unrecognised option '%s'.\n", argv[ a ]);
@@ -3818,9 +4240,13 @@ static int parse_arguments( int argc, char **argv ) {
 		return( 0 );
 	}
 	if(( option_flags & DISPLAY_MASK ) == 0 ) {
-		printf( "Output format required.\n" );
+		printf( "Output format not specified.\n" );
 		return( -2 );
 	}
+	if(( iso_options & (ISO_MC6809|ISO_HD6309)) == 0 ) {
+		printf( "Target CPU not specified.\n" );
+		return( -3 );
+	}		
 	return(( a >= argc )? 0: a );
 }
 
@@ -3841,19 +4267,19 @@ int main( int argc, char *argv[] ) {
 	//
 	if(( file = parse_arguments( argc, argv )) <= 0 ) return( -file );
 	if(( source = fopen( argv[ file ], "r" )) == NULL ) {
-		fprintf( stderr, "Unable to open file '%s', error '%m'.\n", argv[ 1 ]);
-		return( 2 );
+		fprintf( stderr, "Unable to open file '%s', error '%m'.\n", argv[ file ]);
+		return( 4 );
 	}
 	//
 	//	Symbol scanning pass
 	//
-	reset_conditions();
-	if( !parse_input( source, GATHER_PHASE )) {
+	reset_conditions( GATHER_PHASE );
+	if( !parse_input( source )) {
 		//
 		//	Display error message and exit
 		//
 		fprintf( stderr, "Errors detected in gather pass.\n" );
-		return( 3 );
+		return( 5 );
 	}
 	//
 	//	Normalisation pass
@@ -3865,14 +4291,14 @@ int main( int argc, char *argv[] ) {
 		//	Restart for a Normalisation pass.
 		//
 		rewind( source );
-		reset_conditions();
-		if( option_flags & DEBUG_ENABLE ) show_symbols( sym_sort );
-		if( !parse_input( source, NORMALISE_PHASE )) {
+		reset_conditions( NORMALISE_PHASE );
+		if( option_flags & DISPLAY_DEBUG ) show_symbols( sym_sort );
+		if( !parse_input( source )) {
 			//
 			//	Display error message and exit
 			//
 			fprintf( stderr, "Errors detected in normalisation pass.\n" );
-			return( 4 );
+			return( 6 );
 		}	
 		//
 		//	Have things improved?
@@ -3884,7 +4310,7 @@ int main( int argc, char *argv[] ) {
 			//	unresolved co-dependency.
 			//
 			fprintf( stderr, "Symbol normalisation cannot be resolved.\n" );
-			return( 5 );
+			return( 7 );
 		}
 		if( count == 0 ) {
 			//
@@ -3902,17 +4328,17 @@ int main( int argc, char *argv[] ) {
 	//
 	if( init_output( argv[ file ])) {
 		rewind( source );
-		reset_conditions();
-		if( !parse_input( source, GENERATOR_PHASE )) {
+		reset_conditions( GENERATOR_PHASE );
+		if( !parse_input( source )) {
 			end_output();
 			fprintf( stderr, "Code generation pass failed.\n" );
-			return( 6 );
+			return( 8 );
 		}
 		end_output();
 	}
 	else {
 		fprintf( stderr, "Initialisation of output target failed.\n" );
-		return( 7 );
+		return( 9 );
 	}
 	//
 	//	Output complete!
