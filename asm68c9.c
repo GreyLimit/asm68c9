@@ -54,8 +54,8 @@
 //	We define some basic types which work well
 //	with an assembler implementation.
 //
-typedef uint8_t byte;
 typedef uint8_t bool;
+typedef uint8_t byte;
 typedef uint16_t word;
 
 //
@@ -103,24 +103,28 @@ typedef uint16_t word;
 //	into the option_flags variable.
 //
 typedef enum {
-	OPTIONS_NONE		= 000000,
+	OPTIONS_NONE		= 0000000,
 	//
-	DISPLAY_TEXT		= 000001,
-	DISPLAY_INTEL		= 000002,
-	DISPLAY_MOTOROLA	= 000004,
-	DISPLAY_NOTHING		= 000010,
-	DISPLAY_LISTING		= 000020,
+	DISPLAY_TEXT		= 0000001,
+	DISPLAY_INTEL		= 0000002,
+	DISPLAY_MOTOROLA	= 0000004,
+	DISPLAY_NOTHING		= 0000010,
+	DISPLAY_LISTING		= 0000020,
 	DISPLAY_MASK		= (DISPLAY_TEXT|DISPLAY_INTEL|DISPLAY_MOTOROLA|DISPLAY_NOTHING|DISPLAY_LISTING),
-	DISPLAY_STDOUT		= 000040,
+	DISPLAY_STDOUT		= 0000040,
 	//
-	LEGACY_SYNTAX		= 000100,
-	DISPLAY_SYMBOLS		= 000200,
-	HITACHI_6309		= 000400,
+	RELOCATION_DATA		= 0000100,
+	___0000200___		= 0000200,
+	___0000400___		= 0000400,
 	//
-	DISPLAY_OPCODES		= 001000,
-	DISPLAY_HELP		= 002000,
-	DISPLAY_DEBUG		= 004000,
-	DISPLAY_VEBOSE		= 010000
+	LEGACY_SYNTAX		= 0001000,
+	DISPLAY_SYMBOLS		= 0002000,
+	HITACHI_6309		= 0004000,
+	//
+	DISPLAY_OPCODES		= 0010000,
+	DISPLAY_HELP		= 0020000,
+	DISPLAY_DEBUG		= 0040000,
+	DISPLAY_VEBOSE		= 0100000
 } program_options;
 
 //
@@ -316,7 +320,7 @@ static program_options option_flags = OPTIONS_NONE;
 //	the address provided.
 //
 //	Historically assemblers have provided two symbols that could be
-//	applied as 'hints' or explicit 'directive' to the assembler and guide
+//	seen as 'hints' or explicit 'directive' to the assembler and guide
 //	how the assembler instruction was translated into machine code:
 //
 //	'<'	Direct mode
@@ -326,8 +330,9 @@ static program_options option_flags = OPTIONS_NONE;
 //	would direct the assembler to generate an instruction using the
 //	indicated access mode.
 //
-//	However, There are historic examples of assembler where (especially
-//	the direct symbol) precedes access modes not obviously applicable.
+//	However, There are historic examples of assembler source code
+//	where (notably the direct symbol) precedes access modes other
+//	than direct page access.
 //
 //	The conclusion is that these symbols should be interpreted in an
 //	alternative fashion, thus:
@@ -1501,7 +1506,7 @@ typedef enum {
 	TOK_LEGACY_STRING,				//	Legacy string and
 	TOK_LEGACY_CHARACTER,				//	character constants
 	//
-	TOK_EXTENDED, TOK_DIRECT,			// > <
+	TOK_BYTE_VAL, TOK_WORD_VAL,			// < >
 	TOK_IMMEDIATE,					// #
 	TOK_A, TOK_B, TOK_D,				// A B D
 	TOK_X, TOK_Y,					// X Y
@@ -1554,8 +1559,8 @@ static token_defn fixed_tokens[] = {
 	{ "|",	1,	TOK_OR		},
 	{ "^",	1,	TOK_XOR		},
 	{ "~",	1,	TOK_NOT		},
-	{ "<",	1,	TOK_DIRECT	},
-	{ ">",	1,	TOK_EXTENDED	},
+	{ "<",	1,	TOK_BYTE_VAL	},
+	{ ">",	1,	TOK_WORD_VAL	},
 	{ "#",	1,	TOK_IMMEDIATE	},
 	{ NULL }
 };
@@ -1646,10 +1651,12 @@ static char *get_token( char *input, a_token *tok ) {
 	//	Numeric value (of one sort or another).
 	//
 	if( is_number_1( c )) {
-		do {
+		tok->len++;
+		c = *++input;
+		while( is_number_2( c )) {
 			tok->len++;
 			c = *++input;
-		} while( is_number_2( c ));
+		}
 		tok->tok = TOK_VALUE;
 		return( input );
 	}
@@ -1657,10 +1664,12 @@ static char *get_token( char *input, a_token *tok ) {
 	//	Identifier?
 	//
 	if( is_ident_1( c )) {
-		do {
+		tok->len++;
+		c = *++input;
+		while( is_ident_2( c )) {
 			tok->len++;
 			c = *++input;
-		} while( is_ident_2( c ));
+		}
 		//
 		//	But before we assume its an identifier, it could be
 		//	a register name...
@@ -1813,6 +1822,16 @@ typedef enum {
 } arg_content;
 
 //
+//	Declare a mechanism for tracking how
+//	big a numeric value is expected to be.
+//
+typedef enum {
+	SIZE_UNKNOWN	= 0,
+	SIZE_BYTE	= 1,
+	SIZE_WORD	= 2
+} data_size;
+
+//
 //	Arguments are consolidated down to an example
 //	of the following structure
 //
@@ -1826,6 +1845,7 @@ typedef struct {
 	//	Details
 	//
 	int		value;
+	data_size	size;
 	arg_tokens	a_reg;
 	arg_tokens	i_reg;
 	//
@@ -1898,6 +1918,7 @@ static void empty_arg_data( arg_data *data ) {
 	data->op = OP_INHERENT;
 	data->ea = EA_NONE;
 	data->value = 0;
+	data->size = SIZE_UNKNOWN;
 	data->a_reg = TOK_EOS;
 	data->i_reg = TOK_EOS;
 	data->reg_pair = 0;
@@ -2226,13 +2247,19 @@ static int character_value( char **s, int *l ) {
 }
 
 //
-//	Perform a calculation of a value tree.
+//	Perform a calculation of a value tree and
+//	place value in the result area.  Return
+//	true on success or false if there was an error.
 //
 static int evaluate_tree( a_token *here ) {
-	if( here == NULL ) return( 0 );
+
+	if( here == NULL ) return( true );
+	
 	switch( here->tok ) {
 		case TOK_SYMBOL: {
 			char	*str;
+
+			ASSERT( here->len > 0 );
 
 			str = memcpy( alloca( here->len+1 ), here->start , here->len );
 			str[ here->len ] = EOS;
@@ -2487,7 +2514,7 @@ static a_token *organise_index_reg( a_token *list, resync *toks, a_token **tree,
 	switch( list->tok ) {
 		case TOK_MINUS:
 		case TOK_MINUSMINUS: {
-			if(( data->ea != EA_NONE )&& log ) log_error( "Invalid register offset effective address" );
+			if(( data->ea != EA_NONE )&& log ) log_error( "Invalid register offset effective address (-/--)" );
 			switch( list->c->tok ) {
 				case TOK_X:
 				case TOK_Y:
@@ -2524,7 +2551,7 @@ static a_token *organise_index_reg( a_token *list, resync *toks, a_token **tree,
 			switch( list->c->tok ) {
 				case TOK_PLUS:
 				case TOK_PLUSPLUS: {
-					if(( data->ea != EA_NONE )&& log ) log_error( "Invalid register offset effective address" );
+					if(( data->ea != EA_NONE )&& log ) log_error( "Invalid register offset effective address (+/++)" );
 					if( ind ) {
 						if( list->c->tok == TOK_PLUS ) {
 							if( log ) log_error( "Invalid indirected single post-increment" );
@@ -2557,7 +2584,6 @@ static a_token *organise_index_reg( a_token *list, resync *toks, a_token **tree,
 			break;
 		}
 		case TOK_PC: {
-			if(( data->ea != EA_NONE )&& log ) log_error( "Invalid register offset effective address" );
 			data->ea = ind? EA_IND_OFFSET_PC: EA_OFFSET_PC;
 			data->i_reg = list->tok;
 			*tree = list;
@@ -2574,12 +2600,39 @@ static a_token *organise_index_reg( a_token *list, resync *toks, a_token **tree,
 }
 
 //
+//	Handle those fiddle BYTE/DIRECT or WORD/EXTENDED operators.
+//
+static a_token *organise_size( a_token *list, arg_data *data ) {
+	
+	ASSERT( list != NULL );
+	ASSERT( data != NULL );
+	
+	switch( list->tok ) {
+		case TOK_BYTE_VAL: {
+			data->size = SIZE_BYTE;
+			return( list->c );
+		}
+		case TOK_WORD_VAL: {
+			data->size = SIZE_WORD;
+			return( list->c );
+		}
+		default:break;
+	}
+	return( list );
+}
+
+//
 //	Here we convert the linked list of tokens into a tree structure
 //
 static a_token *organise_arg( a_token *list, resync *toks, a_token **tree, arg_data *data ) {
 	resync		sync1,
 			sync2;
 	bool		log;
+
+	ASSERT( list != NULL );
+	ASSERT( toks != NULL );
+	ASSERT( tree != NULL );
+	ASSERT( data != NULL );
 
 	//
 	//	Before converting into a tree, check to see
@@ -2593,13 +2646,17 @@ static a_token *organise_arg( a_token *list, resync *toks, a_token **tree, arg_d
 	switch( list->tok ) {
 		case TOK_OBRACKET: {
 			//
-			//	All Effective Address indirect arguments
+			//	All Indirect Effective Address arguments
 			//	are handled in this case.
 			//
 			list = list->c;			// skip bracket.
 			//
+			//	Size operator?
+			//
+			list = organise_size( list, data );
+			//
 			//	At this point only interested in
-			//	the close bracket.
+			//	the pending close bracket.
 			//
 			sync1.stok = TOK_CBRACKET;
 			sync1.prev = toks;
@@ -2669,38 +2726,17 @@ static a_token *organise_arg( a_token *list, resync *toks, a_token **tree, arg_d
 			data->op = OP_EADRS;
 			break;
 		}
-		case TOK_DIRECT: {
-			list = list->c;
-			list = organise_value( list, toks, tree, log );
-			data->value = evaluate_tree( *tree );
-			data->op = OP_DIRECT;
-			//
-			//	It seems that, historically, that
-			//	'<value,ireg' was an accepted format.
-			//	This seems to me to be contradictory
-			//	to the interpretation of the '<'
-			//	DIRECT symbol.
-			//
-			if(( option_flags & LEGACY_SYNTAX )&&( list->tok == TOK_COMMA )) {
-				//
-				//	Pick out an index the index register.
-				//
-				list->a = *tree;
-				*tree = list;
-				list = organise_index_reg( list->c, toks, &( list->b ), false, data );
-				data->op = OP_EADRS;
-			}
-			break;
-		}
-		case TOK_EXTENDED: {
-			list = list->c;
-			list = organise_value( list, toks, tree, log );
-			data->value = evaluate_tree( *tree );
-			data->op = OP_EXTENDED;
-			break;
-		}
 		case TOK_IMMEDIATE: {
+			//
+			//	Skip immediate.
+			//
 			list = list->c;
+			//
+			//	Size operator?
+			//
+			list = organise_size( list, data );
+			//
+			//
 			list = organise_value( list, toks, tree, log );
 			data->value = evaluate_tree( *tree );
 			data->op = OP_IMM_UNDEF;
@@ -2719,6 +2755,10 @@ static a_token *organise_arg( a_token *list, resync *toks, a_token **tree, arg_d
 			break;
 		}
 		default: {
+			//
+			//	Size operator?
+			//
+			list = organise_size( list, data );
 			//
 			//	All arguments which start with a value or a register; something
 			//	other than an explicitly predictable token.
@@ -3102,6 +3142,14 @@ static bool process_machine_inst( int line, char *opcode, char *arg ) {
 			}
 
 			//
+			//	Confirm supported instruction
+			//
+			if(!( iso_options & o->iso )) {
+				log_error( "Unsupported on target CPU" );
+				continue;
+			}
+
+			//
 			//	Found a match on the opcode extension
 			//
 			PRINT_VERBOSE(( "Match extend='%s'.\n", e->extn ));
@@ -3121,9 +3169,11 @@ static bool process_machine_inst( int line, char *opcode, char *arg ) {
 				//	the extended address is the same as the declared DP
 				//	then we have a match.
 				//
-				if(( a->mode == OP_DIRECT )&&( data.op == OP_EXTENDED )&&( H( data.value ) == direct_page )) {
-					PRINT_VERBOSE(( "Arg: Direct\n" ));
-					break;
+				if(( a->mode == OP_DIRECT )&&( data.op == OP_EXTENDED )) {
+					if(( H( data.value ) == direct_page )||( data.size == SIZE_BYTE )) {
+						PRINT_VERBOSE(( "Arg: Direct\n" ));
+						break;
+					}
 				}
 				//
 				//	Immediate values are always 'undefined' and so need
@@ -3204,7 +3254,7 @@ static bool process_machine_inst( int line, char *opcode, char *arg ) {
 				}
 				case OP_IMM_BYTE: {			// #byte
 					if(( data.value < -128 )||( data.value > 255 )) if( assembler_pass == GENERATOR_PHASE ) log_error( "Immediate value out of byte range" );
-					inst[ len++ ] = L( data.value );
+					inst[ len++ ] = L( data.value ); 
 					break;
 				}
 				case OP_IMM_WORD: {			// #word
@@ -3994,7 +4044,7 @@ static bool break_line( char *line, char **label, char **opcode, char **arg, cha
 	//	Label at start of line?
 	//
 	if( is_ident_1( *line )) {
-		*label = line;
+		*label = line++;
 		while( is_ident_2( *line )) line++;
 		if(( *line != EOS )&&( !isspace( *line ))&&( *line != COLON )) {
 			log_error( "Label incorrectly terminated" );
@@ -4170,6 +4220,10 @@ static option options[] = {
 	{	"--no-output",		"\tDo not output any code",		DISPLAY_NOTHING,	DISPLAY_MASK,		ISO_NONE	},
 	{	"--stdout",		"\tSend output to console",		DISPLAY_STDOUT,		OPTIONS_NONE,		ISO_NONE	},
 	//
+	//	Option to enable relocation data in output.
+	//
+	{	"--relocate",		"\tInclude relocation data in output",	RELOCATION_DATA,	OPTIONS_NONE,		ISO_NONE	},
+	//
 	//	Syntax options.
 	//
 	{	"--legacy-syntax",	"\tAccept legacy Motorola syntax",	LEGACY_SYNTAX,		OPTIONS_NONE,		ISO_NONE	},
@@ -4182,7 +4236,7 @@ static option options[] = {
 	//	Instruction Set options.
 	//
 	{	"--mc6809",		"\tSelect MC6809 instructions",		OPTIONS_NONE,		OPTIONS_NONE,		ISO_MC6809		},
-	{	"--hd6309",		"\tMC6809 and HD6309 instructions",	OPTIONS_NONE,		OPTIONS_NONE,		ISO_MC6809|ISO_HD6309	},
+	{	"--hd6309",		"\tSelect MC6809 and HD6309 instructions", OPTIONS_NONE,	OPTIONS_NONE,		ISO_MC6809|ISO_HD6309	},
 	{	"--undocumented",	"\tInclude undocumented instructions",	OPTIONS_NONE,		OPTIONS_NONE,		ISO_UNDOCUMENTED	},
 	{	"--aliases",		"\tInclude instruction aliases",	OPTIONS_NONE,		OPTIONS_NONE,		ISO_ALIASES		},
 	//
